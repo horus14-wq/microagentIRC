@@ -17,8 +17,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
-	"syscall"
 	"testing"
 	"time"
 )
@@ -40,6 +40,9 @@ func run(m *testing.M) int {
 	}
 	defer func() { _ = os.RemoveAll(dir) }()
 	binary = filepath.Join(dir, "mairc")
+	if runtime.GOOS == "windows" {
+		binary += ".exe" // Windows runs only files with an executable extension
+	}
 	build := exec.CommandContext(context.Background(), "go", "build", "-o", binary, "../cmd/mairc")
 	build.Env = append(os.Environ(), "CGO_ENABLED=0")
 	if out, err := build.CombinedOutput(); err != nil {
@@ -128,6 +131,7 @@ func (w *world) startDaemon() {
 	w.t.Helper()
 	w.daemon = exec.CommandContext(context.Background(), binary, "daemon")
 	w.daemon.Env = w.env()
+	ownGroup(w.daemon)
 	var stderr bytes.Buffer
 	w.daemon.Stderr = &stderr
 	if err := w.daemon.Start(); err != nil {
@@ -136,7 +140,8 @@ func (w *world) startDaemon() {
 	w.until("the daemon to answer /healthz", w.healthy)
 }
 
-// stopDaemon sends SIGTERM and requires a clean exit within three seconds.
+// stopDaemon asks the daemon to stop (SIGTERM; a console break on Windows) and requires a clean exit within three
+// seconds.
 func (w *world) stopDaemon() {
 	w.t.Helper()
 	if w.daemon == nil {
@@ -144,7 +149,7 @@ func (w *world) stopDaemon() {
 	}
 	cmd := w.daemon
 	w.daemon = nil
-	if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {
+	if err := askToStop(cmd.Process); err != nil {
 		w.t.Errorf("signal the daemon: %v", err)
 		return
 	}

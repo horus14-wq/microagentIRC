@@ -11,6 +11,7 @@ import (
 	_ "embed" // the schema and the statements are embedded .sql files
 	"errors"
 	"fmt"
+	"runtime"
 	"strings"
 	"time"
 
@@ -35,10 +36,21 @@ type Store struct {
 
 // Open opens the database file, creating it if needed, applies the schema and prepares every statement.
 func Open(ctx context.Context, path string) (*Store, error) {
-	// The path goes into a URI: only the characters that would end or alter it are escaped.
-	escaped := strings.NewReplacer("%", "%25", "?", "%3f", "#", "%23").Replace(path)
-	return open(ctx, "file:"+escaped+"?_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)"+
+	return open(ctx, fileURI(path, runtime.GOOS == "windows")+"?_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)"+
 		"&_pragma=foreign_keys(ON)&_pragma=busy_timeout(2000)")
+}
+
+// fileURI is path as an SQLite URI filename (sqlite.org/uri.html). Only the characters that would end or alter the
+// URI are escaped. On Windows the separators become "/" and a drive path gets a leading "/" ("file:/C:/a/b.db"):
+// SQLite does not read "file:C:\a\b.db" as a path, and failed to open the database there (error 14).
+func fileURI(path string, windows bool) string {
+	if windows {
+		path = strings.ReplaceAll(path, `\`, "/")
+		if len(path) >= 2 && path[1] == ':' {
+			path = "/" + path
+		}
+	}
+	return "file:" + strings.NewReplacer("%", "%25", "?", "%3f", "#", "%23").Replace(path)
 }
 
 // OpenMemory opens a private in-memory database, for tests.

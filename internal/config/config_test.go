@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -217,8 +218,8 @@ func TestSaveRoundTripsAndIsAtomic(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Mode().Perm() != 0o600 {
-		t.Fatalf("mode = %o", info.Mode().Perm())
+	if want := privateMode(); info.Mode().Perm() != want {
+		t.Fatalf("mode = %o, want %o", info.Mode().Perm(), want)
 	}
 
 	// A failed write leaves the old file intact: an invalid settings value is refused before any write,
@@ -272,27 +273,40 @@ func TestResolvePaths(t *testing.T) {
 	env := func(m map[string]string) func(string) string {
 		return func(k string) string { return m[k] }
 	}
-	p, err := ResolvePaths(env(map[string]string{"MAIRC_HOME": "/m"}))
-	if err != nil || p.Config != "/m/config.json" || p.DB != "/m/mairc.db" || p.Token != "/m/token" ||
-		p.Log != "/m/daemon.log" || p.PID != "/m/daemon.pid" || p.Home != "/m" {
+	// On every OS: MAIRC_HOME wins, and the file names under it.
+	m := filepath.Join("/", "m")
+	p, err := ResolvePaths(env(map[string]string{"MAIRC_HOME": m}))
+	if err != nil || p.Config != filepath.Join(m, "config.json") || p.DB != filepath.Join(m, "mairc.db") ||
+		p.Token != filepath.Join(m, "token") || p.Log != filepath.Join(m, "daemon.log") ||
+		p.PID != filepath.Join(m, "daemon.pid") || p.Home != m {
 		t.Fatalf("MAIRC_HOME paths = %+v, %v", p, err)
 	}
-	p, err = ResolvePaths(env(map[string]string{"XDG_DATA_HOME": "/x"}))
-	if err != nil || p.Home != "/x/mairc" || p.Config != "/x/mairc/config.json" {
+	p, _ = ResolvePaths(env(map[string]string{"MAIRC_HOME": m, "XDG_DATA_HOME": "/x", "HOME": "/h", "LOCALAPPDATA": "/l"}))
+	if p.Home != m {
+		t.Fatalf("MAIRC_HOME should win: %+v", p)
+	}
+	// The Linux rules on any host (macOS and Windows have their own native directories: TestDataHomePerOS).
+	none := func() (string, error) { return "", errors.New("no dir") }
+	p, err = resolve("linux", env(map[string]string{"XDG_DATA_HOME": "/x"}), none, none)
+	if err != nil || p.Home != filepath.Join("/x", "mairc") || p.Config != filepath.Join("/x", "mairc", "config.json") {
 		t.Fatalf("XDG paths = %+v, %v", p, err)
 	}
-	p, err = ResolvePaths(env(map[string]string{"HOME": "/h"}))
+	p, err = resolve("linux", env(map[string]string{"HOME": "/h"}), none, none)
 	if err != nil || p.Home != filepath.Join("/h", ".local", "share", "mairc") {
 		t.Fatalf("HOME paths = %+v, %v", p, err)
 	}
-	if _, err := ResolvePaths(env(map[string]string{})); err == nil {
-		t.Fatal("ResolvePaths with no env must fail")
+	if _, err := resolve("linux", env(map[string]string{}), none, none); err == nil {
+		t.Fatal("resolve with no env must fail")
 	}
-	// MAIRC_HOME wins over the fallbacks.
-	p, _ = ResolvePaths(env(map[string]string{"MAIRC_HOME": "/m", "XDG_DATA_HOME": "/x", "HOME": "/h"}))
-	if p.Home != "/m" {
-		t.Fatalf("MAIRC_HOME should win: %+v", p)
+}
+
+// privateMode is what a file written with mode 0600 reports here: Windows has no Unix permission bits, and Go reports
+// a writable file as 0666 (Chmod only sets or clears the read-only attribute), so there the contract is "writable".
+func privateMode() os.FileMode {
+	if runtime.GOOS == "windows" {
+		return 0o666
 	}
+	return 0o600
 }
 
 // oz8wd-style rule coverage for mairc-7fl: every OS rule is exercised on any host, with the OS name and both
@@ -319,7 +333,7 @@ func TestDataHomePerOS(t *testing.T) {
 			goos:      "linux",
 			env:       map[string]string{"XDG_DATA_HOME": "/x", "HOME": "/h"},
 			configDir: none, homeDir: none,
-			want: "/x/mairc",
+			want: filepath.Join("/x", "mairc"),
 		},
 		{
 			name:      "linux home fallback",

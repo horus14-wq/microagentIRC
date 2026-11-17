@@ -526,3 +526,24 @@ func BenchmarkHasUnreadPM(b *testing.B) {
 		}
 	}
 }
+
+// The URI filename for each OS: Unix paths are used as they are; Windows separators become "/" and a drive path gets
+// the leading "/" SQLite needs. URI-significant characters are escaped on both.
+func TestFileURI(t *testing.T) {
+	cases := []struct {
+		path    string
+		windows bool
+		want    string
+	}{
+		{"/home/a/mairc.db", false, "file:/home/a/mairc.db"},
+		{"/tmp/odd name #1 100%?.db", false, "file:/tmp/odd name %231 100%25%3f.db"},
+		{`C:\Users\a\AppData\Local\mairc\mairc.db`, true, "file:/C:/Users/a/AppData/Local/mairc/mairc.db"},
+		{`C:\Temp\odd name #1 100%?.db`, true, "file:/C:/Temp/odd name %231 100%25%3f.db"},
+		{`relative\mairc.db`, true, "file:relative/mairc.db"},
+	}
+	for _, tc := range cases {
+		if got := fileURI(tc.path, tc.windows); got != tc.want {
+			t.Errorf("fileURI(%q, %v) = %q, want %q", tc.path, tc.windows, got, tc.want)
+		}
+	}
+}
