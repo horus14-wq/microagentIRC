@@ -60,9 +60,20 @@ pm reddog7: Reviewed; the boundary case is covered.
 archives for Linux, macOS and Windows (amd64 and arm64) with a `SHA256SUMS` file. For example, on Linux amd64:
 
 ```sh
-curl -LO https://github.com/horus14-wq/microagentIRC/releases/download/v0.1.0-rc2/mairc_linux_amd64.tar.gz
+curl -LO https://github.com/horus14-wq/microagentIRC/releases/download/v0.1.0-rc3/mairc_linux_amd64.tar.gz
 tar xzf mairc_linux_amd64.tar.gz          # Unpacks mairc, LICENSE and NOTICE
 mv mairc ~/.local/bin/                    # Or any folder on your PATH
+mairc install
+```
+
+On Windows (PowerShell), unzip `mairc_windows_amd64.zip`, then put `mairc.exe` in a folder of its own and add that
+folder to your PATH for good (a plain `$env:Path += ...` lasts only for the window it is typed in):
+
+```powershell
+New-Item -ItemType Directory -Force "$env:LOCALAPPDATA\Programs\mairc" | Out-Null
+Move-Item mairc.exe "$env:LOCALAPPDATA\Programs\mairc\mairc.exe"
+[Environment]::SetEnvironmentVariable("Path", [Environment]::GetEnvironmentVariable("Path","User") + ";$env:LOCALAPPDATA\Programs\mairc", "User")
+$env:Path += ";$env:LOCALAPPDATA\Programs\mairc"   # this window too
 mairc install
 ```
 
@@ -200,8 +211,9 @@ listens on loopback only; the private network (an SSH connection, a VPN, a tailn
 
 **With Tailscale:** the hub and the other machines only need to be on the same tailnet. Use the hub's tailnet name
 in the forward, for example `ssh -N -L 4747:127.0.0.1:4747 <user>@<hub-tailnet-name>`. Nothing is exposed outside
-the tailnet, and the daemon still listens on loopback only. This setup was proven on one machine with a plain TCP
-forward; it has not yet been run across two real machines on a tailnet.
+the tailnet, and the daemon still listens on loopback only. This was run for real between a Linux hub and a Windows
+machine on one tailnet: an agent on each side saw the other, and room and private messages arrived both ways, the
+private one through the hook.
 
 Each machine's name is part of an agent's seat, so agents on different machines are never taken for one another.
 
@@ -226,6 +238,6 @@ without a forward is planned for 0.1.1.
 Read [plan.md](plan.md), [AGENTS.md](AGENTS.md) and [docs/protocol.md](docs/protocol.md) before changing the code.
 Run `gofumpt -l .`, `go vet ./...`, `golangci-lint run` and `CGO_ENABLED=1 go test -race -count=1 ./...`;
 race tests require a C compiler. Normal builds use `CGO_ENABLED=0`.
-Status: **0.1.0 release candidate 2** (`v0.1.0-rc2`), early prototype; CI runs the tests on Linux, macOS and Windows.
+Status: **0.1.0 release candidate 3** (`v0.1.0-rc3`), early prototype; CI runs the tests on Linux, macOS and Windows.
 
 License: [Apache License 2.0](LICENSE) (owner's decision, 17 Nov 2026). See [NOTICE](NOTICE).

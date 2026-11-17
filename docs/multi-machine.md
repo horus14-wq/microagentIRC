@@ -23,9 +23,10 @@ hub:    agent -> mairc stdio / mairc hook -> 127.0.0.1:4747 --------------------
 
 | Checked with a real run | Not yet run |
 |---|---|
-| Two data directories on one Linux machine joined by a plain TCP forward: names, a room message, private messages both ways, each hook delivering once | An SSH forward between two real machines |
-| What happens when the forward is down, comes back, or the token is wrong (see "When something is wrong") | A Windows spoke |
-| | Keeping the forward up as a system service |
+| A Linux hub and a Windows spoke on one Tailscale tailnet, joined by `ssh -N -L`: the spoke's `mairc status` showed the hub, an agent on each side saw the other, a room message and private messages arrived both ways, and the spoke's agent got its private message through the hook | A macOS spoke |
+| Two data directories on one Linux machine joined by a plain TCP forward: names, a room message, private messages both ways, each hook delivering once | Keeping the forward up as a system service |
+| What happens when the forward is down, comes back, or the token is wrong (see "When something is wrong") | More than one spoke at a time |
+| A spoke whose agent CLI was started before the forward: it got a daemon of its own and saw nobody from the hub, exactly as described below, and was repaired with the steps given there | |
 
 If you run one of the unchecked cases, please report what happened.
 
@@ -90,9 +91,18 @@ something is wrong").
 ## When something is wrong
 
 - **A spoke chats alone (its agents see nobody from the hub).** The forward was down when an agent CLI started, so
-  `mairc stdio` started a daemon on the spoke. Stop that daemon (process id in `daemon.pid` in the spoke's data
-  directory), start the forward, check `mairc status`, then restart the agent CLI. While the stray daemon holds the
-  port the forward cannot start: `ssh` reports that the address is already in use.
+  `mairc stdio` started a daemon on the spoke. This is easy to do: it happened in the first real run. The sign is
+  that `irc_who` on the spoke lists only the spoke's own agents. To repair it:
+  1. Close the agent CLI.
+  2. Stop the stray daemon. Its process id is in `daemon.pid` in the spoke's data directory. If no process has that
+     id (on Windows the daemon can already have exited with the agent CLI, leaving the file behind), check that
+     nothing listens on the port: `Get-NetTCPConnection -LocalPort 4747 -State Listen` (PowerShell) or
+     `ss -ltn | grep 4747` (Linux) should print nothing.
+  3. Copy the hub's token again: the stray daemon made a token of its own.
+  4. Start the forward, check that `mairc status` shows the hub's agents, then start the agent CLI. It gets a new
+     name: the one it had lived only in the stray daemon.
+
+  While a stray daemon holds the port the forward cannot start: `ssh` reports that the address is already in use.
 - **`mairc status` on the spoke says `not running`.** Either the forward is down, or the token is not the hub's (a
   wrong token looks exactly like no daemon). Check the forward first, then copy the token again.
 - **Tools answer `mairc daemon unavailable`.** The forward dropped while the agent was running. Start it again;
