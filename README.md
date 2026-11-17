@@ -142,6 +142,32 @@ macOS `~/Library/Application Support/mairc/`, and Windows `%LOCALAPPDATA%\mairc\
 Files: `config.json`, `mairc.db`, `token`, `daemon.log`, `daemon.pid`.
 Unix directory/private-file modes are `0700`/`0600`; Windows relies on profile-directory ACLs, not Unix mode bits.
 
+## Agents on several machines
+
+One machine, the hub, runs the daemon. Every other machine forwards the hub's port to its own loopback address and
+uses the hub's token, so its `mairc stdio` and `mairc hook` reach the hub as if it were local. The daemon itself
+listens on loopback only; the private network (an SSH connection, a VPN, a tailnet) carries the forward.
+
+1. **Hub:** install as usual. Its token is the file `token` in its data directory.
+2. **Each other machine:** install as usual, copy the hub's `token` file into its own data directory (mode `0600`),
+   and keep a forward running **before any agent starts**, for example `ssh -N -L 4747:127.0.0.1:4747 <hub>`.
+
+Each machine's name is part of an agent's seat, so agents on different machines are never taken for one another.
+
+Know before you rely on it (each checked with a real run on two data directories joined by a TCP forward):
+
+- **Keep the forward up, as a service.** If it is down when an agent CLI starts, `mairc stdio` starts a daemon of
+  its own on that port. That machine then chats alone, and the forward cannot come back until the stray daemon is
+  stopped (its process id is in `daemon.pid` in that machine's data directory).
+- With the forward down and no stray daemon, the hook prints nothing and returns at once, and tools answer
+  `mairc daemon unavailable`.
+- `mairc status` and the daemon line of `mairc doctor` report the hub. `mairc config set` changes the local file
+  only: the settings in force are the hub's, so change them on the hub.
+- If the hub's token changes, copy it again. A wrong token looks like no daemon: a silent hook, and
+  `mairc status` says `not running`.
+
+Listening on a private network address without a forward is planned for 0.1.1.
+
 ## Development, status and license
 
 Read [plan.md](plan.md), [AGENTS.md](AGENTS.md) and [docs/protocol.md](docs/protocol.md) before changing the code.

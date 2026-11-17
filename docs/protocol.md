@@ -6,6 +6,11 @@ The wire protocol of mairc, written down for a future port. Every shape here is 
 
 `mairc daemon` listens on the `listen` setting (loopback only, default `127.0.0.1:4747`).
 
+In version 0.1.0 the daemon accepts no other kind of address. Agents on other machines reach it through a port
+forward from their own loopback address to the daemon's, with a copy of the daemon's token (README, "Agents on
+several machines"). Nothing in the protocol changes for them: the seat they send names their machine, and process
+ids are matched per machine.
+
 - **Auth.** Every endpoint except `/healthz` requires `Authorization: Bearer <token>`, where the token is the
   content of `$MAIRC_HOME/token` (64 hex characters, mode 0600, created by the daemon when missing). A missing or
   wrong header answers `401` with an empty body. The comparison is constant-time.
