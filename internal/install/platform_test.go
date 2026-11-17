@@ -4,8 +4,8 @@ import (
 	"bytes"
 	"encoding/json"
 	"os"
-	"reflect"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -36,7 +36,7 @@ func TestPlatformHookPathsAndMerge(t *testing.T) {
 			if err := json.Unmarshal(hookHandler(tc.binary).bytes(), &got); err != nil {
 				t.Fatal(err)
 			}
-			if got.Type != "command" || got.Command != tc.command || !reflect.DeepEqual(got.Args, tc.args) || got.Timeout != 5 {
+			if got.Type != "command" || got.Command != tc.command || (got.Args == nil) != (tc.args == nil) || !slices.Equal(got.Args, tc.args) || got.Timeout != 5 {
 				t.Fatalf("handler = %+v; want command %q, args %v, timeout 5", got, tc.command, tc.args)
 			}
 			for _, content := range []string{otherMCP, otherSettings} {
