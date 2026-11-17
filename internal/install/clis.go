@@ -23,9 +23,12 @@ type fileSpec struct {
 	path   string
 	format string     // "json" (writer_json.go) or "block" (writer_block.go: TOML and instruction files)
 	server *entrySpec // JSON: the MCP server entry, or nil
-	hooks  *hookSpec  // JSON: Claude-style hook entries, or nil
-	block  *blockSpec // block: mairc's marked block
-	notice string     // one line printed after install changed this file (a step only the user can do)
+	// namedHook says the entry in server is not an MCP server but the CLI's hook: a named object whose event keys
+	// hold bare handler lists (Antigravity). The JSON writer treats it as any entry; status reports it as the hook.
+	namedHook bool
+	hooks     *hookSpec  // JSON: Claude-style hook entries, or nil
+	block     *blockSpec // block: mairc's marked block
+	notice    string     // one line printed after install changed this file (a step only the user can do)
 }
 
 // An entrySpec is one named entry inside an object reached by keyPath, e.g. mcpServers.mairc.
@@ -81,10 +84,11 @@ func pi() cliSpec {
 	}
 }
 
-// antigravity is Antigravity CLI (agy 1.4.2, checked on this host 17 Nov 2026: "agy mcp add" in an empty HOME writes
+// antigravity is Antigravity CLI (agy 1.5.x; checked on this host 17 Nov 2026: "agy mcp add" in an empty HOME writes
 // ~/.gemini/config/mcp_config.json, mcpServers.<name> {command, args}, and "agy mcp list" reads it back; it has no
-// project scope, and ~/.gemini/mcp.json is not read). MCP only and user scope only: whether its hooks
-// (~/.gemini/config/hooks.json) reach the model is not yet researched in docs/compat.md.
+// project scope, and ~/.gemini/mcp.json is not read). User scope only. Hooks: ~/.gemini/config/hooks.json holds
+// named hooks; mairc's is the top-level entry "mairc" (agyHooks), which delivers chat through injectSteps before
+// each model call (docs/compat.md, "Google Antigravity CLI").
 func antigravity() cliSpec {
 	return cliSpec{
 		name:     "agy",
@@ -94,10 +98,16 @@ func antigravity() cliSpec {
 			if scope == "project" {
 				return nil
 			}
-			return []fileSpec{{
-				path: filepath.Join(o.Home, ".gemini", "config", "mcp_config.json"), format: "json",
-				server: &entrySpec{keyPath: []string{"mcpServers"}, name: "mairc", value: stdioServer},
-			}}
+			return []fileSpec{
+				{
+					path: filepath.Join(o.Home, ".gemini", "config", "mcp_config.json"), format: "json",
+					server: &entrySpec{keyPath: []string{"mcpServers"}, name: "mairc", value: stdioServer},
+				},
+				{
+					path: filepath.Join(o.Home, ".gemini", "config", "hooks.json"), format: "json",
+					server: &entrySpec{name: "mairc", value: agyHooks}, namedHook: true,
+				},
+			}
 		},
 	}
 }

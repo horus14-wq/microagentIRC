@@ -68,6 +68,23 @@ func statusOf(c cliSpec, scope string, o Options) Status {
 			continue
 		}
 		switch {
+		case f.server != nil && f.namedHook:
+			if s.HookPath == "" {
+				s.HookPath, s.HookNotice = f.path, f.notice
+			}
+			if len(raw) == 0 {
+				continue
+			}
+			root, perr := parse(raw)
+			if perr != nil || root.kind != objectNode {
+				if s.Problem == "" {
+					s.Problem = f.path + ": not a JSON object"
+				}
+				continue
+			}
+			if command, ok := namedHookCommand(walkKeys(root, f.server.keyPath).get(f.server.name)); ok {
+				s.HookPresent, s.HookCommand = true, command
+			}
 		case f.server != nil:
 			if s.MCPPath == "" {
 				s.MCPPath = f.path
@@ -160,6 +177,28 @@ func serverCommand(entry *node) (string, bool) {
 		}
 		if command.kind == arrayNode && len(command.items) > 0 {
 			return command.items[0].stringValue()
+		}
+	}
+	return "", false
+}
+
+// namedHookCommand returns the command of the first handler in a named hook entry (Antigravity: an object whose
+// event keys hold bare handler lists), in the order the events are written.
+func namedHookCommand(entry *node) (string, bool) {
+	if entry == nil || entry.kind != objectNode {
+		return "", false
+	}
+	for _, handlers := range entry.items {
+		if handlers.kind != arrayNode {
+			continue
+		}
+		for _, handler := range handlers.items {
+			if handler.kind != objectNode {
+				continue
+			}
+			if command, ok := handler.get("command").stringValue(); ok {
+				return command, true
+			}
 		}
 	}
 	return "", false

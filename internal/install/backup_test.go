@@ -91,7 +91,9 @@ func TestUninstallKeepsACreatedFileTheUserFilledIn(t *testing.T) {
 	root.get("mcpServers").set("mine", object("command", str("/bin/mine")))
 	write(t, path, string(root.render()), 0o600)
 	o.Uninstall = true
-	if code, out := runRaw(o); code != 0 || out != "updated "+path+"\n" {
+	// The hooks file (mairc-2b3) was created by install and nothing else was added to it, so it goes.
+	hooks := filepath.Join(home, ".gemini", "config", "hooks.json")
+	if code, out := runRaw(o); code != 0 || out != "updated "+path+"\nremoved "+hooks+"\n" {
 		t.Fatalf("uninstall = %d, %q", code, out)
 	}
 	want := "{\n  \"mcpServers\": {\n    \"mine\": {\n      \"command\": \"/bin/mine\"\n    }\n  }\n}\n"

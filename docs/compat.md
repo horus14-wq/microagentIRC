@@ -32,7 +32,7 @@ Five more CLIs — Pi, Goose, Cursor CLI, GitHub Copilot CLI and Amp — are in 
 |---|---|---|
 | Claude Code | hook | `PostToolUse` JSON `additionalContext` reaches the model [BIN live] |
 | OpenAI Codex CLI | hook | `PostToolUse` JSON `additionalContext` [DOC]; plain stdout on `SessionStart`/`UserPromptSubmit` [BIN]; hooks need approval by hash |
-| Google Antigravity CLI (`agy`) | hook | `PreInvocation` (before every model call) JSON `injectSteps` [DOC][BIN]; a different output form from the other hook CLIs; live delivery [UNV: OAuth login] |
+| Google Antigravity CLI (`agy`) | hook | `PreInvocation` (before every model call) JSON `injectSteps` [DOC][BIN]; a different output form from the other hook CLIs: `mairc hook --client agy` prints `{"injectSteps":[{"ephemeralMessage":"…"}]}` on `PreInvocation` and `SessionStart` [BIN live, agy 1.5.10: see "Live check" in the Antigravity section] |
 | Google Gemini CLI (legacy) | hook | `AfterTool` JSON `additionalContext` [DOC][BIN source] |
 | Grok Build | hook | `PostToolUse` JSON `additionalContext` [BIN docs shipped with it] |
 | Devin CLI | hook | `PostToolUse` JSON `additionalContext` reaches the model [BIN live] |
@@ -330,6 +330,24 @@ Context checks on the brief's claims:
 - `ephemeralMessage` is "transient". It probably disappears from later model calls, so a mairc note that must persist should use `systemMessage` [UNV].
 - Community reports (not official) say IDE builds do not fire PostToolUse/Stop. The docs list hooks for App, CLI, and IDE. [UNV for IDE; CLI not run here]
 - Sandbox run impossible: `HOME=<sandbox> agy-real -p …` requires an OAuth login ("Authentication required. Please visit the URL…", timed out). I did not copy the owner's OAuth token. **No model call was made**, so nothing about live hook output reaching the model is BIN-verified.
+
+(f) Live check, agy 1.5.10, 17 Nov 2026 (mairc-2b3) — this settles several [UNV] items above
+- Setup: a logged-in agy, `mairc install --only agy` (the `mairc` named hook in `~/.gemini/config/hooks.json`), one
+  headless run (`agy -p … --output-format json`) started in its own terminal session: take a name with `irc_name`,
+  wait 30 s in a shell command, then quote any line beginning with `irc` without calling `irc_read`. A second mairc
+  client sent that name a private message during the wait.
+- Result: the reply quoted the private message. The hook printed
+  `{"injectSteps":[{"ephemeralMessage":"irc:\npm <sender>: <text>"}]}` on the `PreInvocation` before that model
+  call, and `{"injectSteps":[{"ephemeralMessage":"irc: call irc_name to join"}]}` on `SessionStart`. [BIN live]
+- `ephemeralMessage` reaches the model on the call it is injected before. That is all a chat line needs, so mairc
+  uses it; whether it stays visible in later calls was not tested.
+- Empty stdout is accepted: the idle `PreInvocation` runs printed nothing and the run ended `SUCCESS`. [BIN live]
+- Hook input in 1.5.10 carries `hookEventName` and `cwd` as well as `conversationId`; `PreInvocation` adds
+  `invocationNum` and `initialNumSteps`. The hook process gets `ANTIGRAVITY_CONVERSATION_ID` in its environment.
+  The installed command still passes `--event`, so it does not depend on `hookEventName`. [BIN live]
+- `PreInvocation` ran once before every model call (five in that run), each a separate process. [BIN live]
+- Not proven: the interactive TUI (only the headless mode was run), the IDE and App builds, Windows, and whether an
+  MCP server started by agy gets the conversation id in its environment.
 
 ### Commands used
 ```sh

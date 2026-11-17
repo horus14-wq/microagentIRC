@@ -31,7 +31,7 @@ type Options struct {
 	BaseURL string        // e.g. "http://127.0.0.1:4747"
 	Token   string        // the daemon's bearer token
 	Timeout time.Duration // the whole request's deadline, from Settings.HookTimeoutMS
-	Client  string        // "claude" or "plain"
+	Client  string        // "claude", "plain" or ClientAgy
 	Event   string        // --event; empty means: take hook_event_name from the stdin JSON
 	Name    string        // --name or $MAIRC_NAME; may be empty
 	Seat    string        // the agent's seat
@@ -80,6 +80,20 @@ func hostDelivers(host, event string) bool {
 	return true
 }
 
+// ClientAgy is the --client value for Antigravity CLI (agy). Its hooks do not read the output form the other hook
+// CLIs share: text reaches the model only through JSON `injectSteps`, and only from SessionStart, PreInvocation
+// (before every model call) and PostInvocation (https://antigravity.google/docs/hooks.md, read 17 Nov 2026).
+const ClientAgy = "agy"
+
+// agyDelivers reports whether Antigravity puts this event's injectSteps in front of the model at a moment mairc
+// wants: the start of a session and before each model call. PostInvocation could inject too, but the next
+// PreInvocation follows at once, so asking there would only add a hook run. The installed hook passes the event
+// with --event: the documented hook input does not name it. Any other event must not ask the daemon, which hands a
+// delivery over when asked: output Antigravity drops would be a lost message.
+func agyDelivers(event string) bool {
+	return event == "PreInvocation" || event == "SessionStart"
+}
+
 // request is the body of POST /v1/hook. Session and Claimed are left out when empty, so an agent CLI that gives
 // the hook neither sends exactly what it sent before they existed.
 type request struct {
@@ -98,7 +112,7 @@ func Run(ctx context.Context, o Options) int {
 	if event == "" {
 		event = in.event
 	}
-	if !hostDelivers(o.Host, event) {
+	if !hostDelivers(o.Host, event) || (o.Client == ClientAgy && !agyDelivers(event)) {
 		return 0
 	}
 	// The session id the agent CLI passed on stdin wins over the one in the environment: stdin is this event's.
@@ -111,7 +125,7 @@ func Run(ctx context.Context, o Options) int {
 		return 0
 	}
 	client := o.Client
-	if o.Host != "" {
+	if o.Host != "" && client != ClientAgy {
 		client = "json" // Grok and Devin read only the JSON form, on every event they deliver
 	}
 	_, _ = io.WriteString(o.Stdout, format(client, event, body))
@@ -300,6 +314,15 @@ type claudeSpecific struct {
 	AdditionalContext string `json:"additionalContext"`
 }
 
+// agyOutput is Antigravity's hook result for the events that may inject steps.
+type agyOutput struct {
+	InjectSteps []agyStep `json:"injectSteps"`
+}
+
+type agyStep struct {
+	EphemeralMessage string `json:"ephemeralMessage"`
+}
+
 // format renders a delivery for the agent CLI.
 //
 // Claude Code hooks (https://code.claude.com/docs/en/hooks; docs.claude.com redirects there), verified 17 Nov 2026:
@@ -312,13 +335,28 @@ type claudeSpecific struct {
 //
 // client "json" (Grok and Devin, set by Run) is the JSON form on every event, the join line included: those CLIs
 // drop plain stdout.
+//
+// client "agy" (Antigravity) is `{"injectSteps":[{"ephemeralMessage":"..."}]}`. ephemeralMessage, "a transient
+// system message", is chosen over systemMessage for two reasons: it is a plain string whose documented example is
+// exactly this object, while the two documented systemMessage examples disagree on its shape (a string beside
+// metadata in one, a nested object in the other); and a chat line is delivered once, so it has no need to stay in
+// later model calls as a standing instruction.
 func format(client, event, body string) string {
 	text := "irc:\n" + body
 	if body == joinLine {
-		if client != "json" {
+		if client != "json" && client != ClientAgy {
 			return body + "\n"
 		}
 		text = body
+	}
+	if client == ClientAgy {
+		var out bytes.Buffer
+		enc := json.NewEncoder(&out)
+		enc.SetEscapeHTML(false)
+		if enc.Encode(agyOutput{InjectSteps: []agyStep{{EphemeralMessage: text}}}) != nil {
+			return ""
+		}
+		return out.String()
 	}
 	if client == "json" || client == "claude" && event != "UserPromptSubmit" && event != "SessionStart" {
 		var out bytes.Buffer

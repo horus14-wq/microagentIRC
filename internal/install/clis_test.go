@@ -412,6 +412,70 @@ func TestOpenCodeRow(t *testing.T) {
 	}
 }
 
+// agyOtherHooks is a hooks.json that already holds someone else's named hook, in a house style of its own.
+const agyOtherHooks = "{\n\t\"guard\": {\n\t\t\"enabled\": true,\n\t\t\"PreToolUse\": [\n\t\t\t{\n\t\t\t\t\"matcher\": \"run_command\"," +
+	"\n\t\t\t\t\"hooks\": [{\"type\": \"command\", \"command\": \"/opt/guard.py\", \"timeout\": 6}]\n\t\t\t}\n\t\t]\n\t}\n}\n"
+
+// Antigravity hooks (mairc-2b3): install adds one named hook, "mairc", to ~/.gemini/config/hooks.json with a bare
+// handler list on SessionStart and PreInvocation, each command naming its event. Another tool's hook in the file
+// is kept byte for byte, a second install changes nothing, and uninstall puts the file back exactly.
+func TestAntigravityHooks(t *testing.T) {
+	home := t.TempDir()
+	path := filepath.Join(home, ".gemini", "config", "hooks.json")
+	write(t, path, agyOtherHooks, 0o600)
+	o := Options{Binary: testBinary, Home: home, Only: []string{"agy"}}
+	if code, out := runRaw(o); code != 0 {
+		t.Fatalf("install = %d, %q", code, out)
+	}
+	installed := string(read(t, path))
+	if !strings.HasPrefix(installed, strings.TrimSuffix(agyOtherHooks, "\n}\n")) {
+		t.Fatalf("the other hook was not kept as written:\n%s", installed)
+	}
+	var got map[string]struct {
+		Enabled       bool `json:"enabled"`
+		SessionStart  []map[string]any
+		PreInvocation []map[string]any
+		PostToolUse   []map[string]any
+	}
+	if err := json.Unmarshal([]byte(installed), &got); err != nil {
+		t.Fatalf("hooks.json is not JSON: %v\n%s", err, installed)
+	}
+	ours := got["mairc"]
+	for event, handlers := range map[string][]map[string]any{
+		"SessionStart": ours.SessionStart, "PreInvocation": ours.PreInvocation,
+	} {
+		want := testBinary + " hook --client agy --event " + event
+		if len(handlers) != 1 || handlers[0]["type"] != "command" || handlers[0]["command"] != want ||
+			handlers[0]["timeout"] != float64(5) || len(handlers[0]) != 3 {
+			t.Fatalf("%s handlers = %v, want one command %q", event, handlers, want)
+		}
+	}
+	if !ours.Enabled || ours.PostToolUse != nil || len(got) != 2 {
+		t.Fatalf("mairc hook = %+v in %d hooks", ours, len(got))
+	}
+	if code, out := runRaw(o); code != 0 || strings.Contains(out, "hooks.json") {
+		t.Fatalf("second install = %d, %q; want hooks.json unchanged", code, out)
+	}
+	if again := string(read(t, path)); again != installed {
+		t.Fatalf("second install changed the file:\n%s", again)
+	}
+	// Status (mairc doctor) reports the named hook as agy's hook, not as a second MCP entry.
+	for _, s := range Statuses(Options{Scope: "user", Home: home, Only: []string{"agy"}}) {
+		wantMCP := filepath.Join(home, ".gemini", "config", "mcp_config.json")
+		if s.HookPath != path || !s.HookPresent || s.MCPPath != wantMCP || !s.MCPPresent ||
+			s.HookCommand != testBinary+" hook --client agy --event SessionStart" {
+			t.Fatalf("status = %+v", s)
+		}
+	}
+	o.Uninstall = true
+	if code, out := runRaw(o); code != 0 {
+		t.Fatalf("uninstall = %d, %q", code, out)
+	}
+	if after := string(read(t, path)); after != agyOtherHooks {
+		t.Fatalf("after uninstall:\n%s", after)
+	}
+}
+
 // Antigravity: the file agy's own "mcp add" writes, exactly; and project scope says it is skipped.
 func TestAntigravityRow(t *testing.T) {
 	home := t.TempDir()

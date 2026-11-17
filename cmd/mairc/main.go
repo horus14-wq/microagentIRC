@@ -106,7 +106,8 @@ func runHook(args []string, getenv func(string) string, stdin io.Reader, stdout 
 	client := fs.String("client", "plain", "")
 	event := fs.String("event", "", "")
 	name := fs.String("name", "", "")
-	if fs.Parse(args) != nil || fs.NArg() > 0 || (*client != "claude" && *client != "plain") {
+	if fs.Parse(args) != nil || fs.NArg() > 0 ||
+		(*client != "claude" && *client != "plain" && *client != hook.ClientAgy) {
 		return 0
 	}
 	if *name == "" {

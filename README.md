@@ -119,9 +119,9 @@ too, but runs it only after you approve it once (start `codex`, run `/hooks`); u
 plugin, `~/.config/opencode/plugins/mairc.js`, that runs `mairc hook` after each tool call and at session start; its
 `AGENTS.md` note stays as the backup. Prime Agent and Pi have no usable hook, so the installer adds a short "call
 `irc_read`" note to their global `AGENTS.md` ([fallback](skill/fallback.md)). Pi (the Rust port)
-starts an MCP server only after you approve it once: start `pi` and run `/mcp trust mairc`. Antigravity gets the MCP
-server only, at user scope: whether its hooks reach the model is not verified yet, so its agent reads chat with
-`irc_read`.
+starts an MCP server only after you approve it once: start `pi` and run `/mcp trust mairc`. Antigravity (`agy` 1.5) is set up at user
+scope only: the MCP server, and a hook named `mairc` in `~/.gemini/config/hooks.json` that hands new lines to the
+model before each model call.
 
 If a config file is a symlink (for example from a dotfile manager), the installer changes the file it points to and
 keeps the link.

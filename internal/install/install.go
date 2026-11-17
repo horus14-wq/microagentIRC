@@ -620,15 +620,46 @@ func backup(path string, raw []byte, mode fs.FileMode) error {
 
 // hookCommand is the command Claude Code runs for each hook event.
 func hookCommand(binary string) string {
+	return shellWord(binary) + " hook --client claude"
+}
+
+// shellWord is binary as one POSIX shell word: unchanged when it holds only safe characters, single-quoted
+// otherwise.
+func shellWord(binary string) string {
 	for _, c := range binary {
 		if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') ||
 			strings.ContainsRune("/_-.:+", c) {
 			continue
 		}
-		binary = "'" + strings.ReplaceAll(binary, "'", "'\"'\"'") + "'"
-		break
+		return "'" + strings.ReplaceAll(binary, "'", "'\"'\"'") + "'"
 	}
-	return binary + " hook --client claude"
+	return binary
+}
+
+// agyHookEvents are the Antigravity events whose hook output reaches the model at a moment mairc wants
+// (internal/hook: agyDelivers), in the order they are written.
+func agyHookEvents() []string {
+	return []string{"SessionStart", "PreInvocation"}
+}
+
+// agyHooks is mairc's named hook in Antigravity's hooks.json (https://antigravity.google/docs/hooks.md, read
+// 17 Nov 2026): {"mairc": {"enabled": true, "<Event>": [{"type": "command", "command": "...", "timeout": N}]}}.
+// SessionStart and PreInvocation take a bare handler list (no matcher). Each command names its event, because the
+// documented hook input does not. The whole entry is mairc's: install rewrites these keys and keeps any other key
+// the user added to it; uninstall removes the entry.
+func agyHooks(binary string) *node {
+	events := agyHookEvents()
+	pairs := make([]any, 0, 2+2*len(events))
+	pairs = append(pairs, "enabled", num("true"))
+	for _, event := range events {
+		command := shellWord(binary) + " hook --client agy --event " + event
+		if windowsBinary(binary) {
+			command = `"` + binary + `" hook --client agy --event ` + event
+		}
+		pairs = append(pairs, event, array(object(
+			"type", str("command"), "command", str(command), "timeout", num(hookTimeoutSeconds))))
+	}
+	return object(pairs...)
 }
 
 func windowsBinary(binary string) bool {
