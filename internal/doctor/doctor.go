@@ -202,6 +202,11 @@ func liveRuns(out io.Writer, o Options, cs []install.Status) int {
 	}
 	problems := 0
 	for _, c := range cs {
+		// A CLI the doctor has no headless command for is not a problem: it is not checked, and says so.
+		if _, ok := LiveCommand(c.Name, prompt); !ok {
+			_, _ = fmt.Fprintf(out, "live %s: not checked — mairc doctor has no headless command recorded for it\n", c.Name)
+			continue
+		}
 		if !o.Spend(c.Name) {
 			_, _ = fmt.Fprintf(out, "live %s: skipped (not run)\n", c.Name)
 			continue
@@ -214,7 +219,7 @@ func liveRuns(out io.Writer, o Options, cs []install.Status) int {
 			_, _ = fmt.Fprintf(out, "live %s: the CLI did not run (%v) — check `%s` runs, then try again\n", c.Name, err, firstWord(c.MCPCommand))
 		case !reached:
 			problems++
-			_, _ = fmt.Fprintf(out, "live %s: it ran but no session reached the daemon — check the MCP entry in %s, then run `mairc install --only %s`\n", c.Name, c.MCPPath, c.Name)
+			_, _ = fmt.Fprintf(out, "live %s: it ran but its tool call did not reach the daemon — check the MCP entry in %s, then run `mairc install --only %s`\n", c.Name, c.MCPPath, c.Name)
 		default:
 			_, _ = fmt.Fprintf(out, "live %s: the tool call reached the daemon\n", c.Name)
 		}

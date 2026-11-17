@@ -452,6 +452,7 @@ type daemonStatus struct {
 	UptimeS  int64  `json:"uptime_s"`
 	Agents   int    `json:"agents"`
 	Sessions int    `json:"sessions"`
+	WhoCalls *int64 `json:"who_calls"` // nil from a daemon older than the field
 }
 
 func runStatus(getenv func(string) string, stdout io.Writer) int {
@@ -639,36 +640,72 @@ const hookCommandTimeout = 15 * time.Second
 
 // liveRun runs a CLI once, headless, and reports whether the daemon saw the MCP session that run opened.
 func liveRun(base, token, cli string) (bool, error) {
-	args, ok := doctor.LiveCommand(cli)
+	args, ok := doctor.LiveCommand(cli, doctor.Prompt())
 	if !ok {
 		return false, fmt.Errorf("mairc doctor has no headless command recorded for %s", cli)
 	}
-	before, _, err := daemonCounts(base, token)
+	before, err := whoCalls(base, token)
 	if err != nil {
 		return false, err
 	}
+	// An empty folder of its own: the run needs a CLI that approves a tool call by itself, and such a CLI should
+	// have nothing of the user's in front of it.
+	dir, err := os.MkdirTemp("", "mairc-doctor-")
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = os.RemoveAll(dir) }()
 	ctx, cancel := context.WithTimeout(context.Background(), doctorTimeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, args[0], append(args[1:], doctor.Prompt())...)
-	cmd.Stdin = nil
+	cmd := exec.CommandContext(ctx, args[0], args[1:]...) // #nosec G204 -- a fixed command per CLI (doctor.LiveCommand)
+	cmd.Dir = dir
+	cmd.Stdin = strings.NewReader("") // some CLIs read "additional input" from stdin when it is not closed
 	var out bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &out
 	if err := cmd.Run(); err != nil {
-		return false, fmt.Errorf("%s: %w", firstLineOf(out.String()), err)
+		return false, fmt.Errorf("%s: %w", lastLineOf(out.String()), err)
 	}
-	after, _, err := daemonCounts(base, token)
+	after, err := whoCalls(base, token)
 	if err != nil {
 		return false, err
 	}
 	return after > before, nil
 }
 
-// firstLineOf is the CLI's first output line, for an error that has to say what happened.
-func firstLineOf(s string) string {
-	if i := strings.IndexByte(s, '\n'); i >= 0 {
-		return s[:i]
+// whoCalls asks the daemon how many irc_who calls it has served. The live run asks a CLI for exactly one, so a
+// higher count afterwards is the tool call arriving. (The session count cannot show it: a headless run's session is
+// gone the moment the run ends.) Another agent calling irc_who in the same seconds would also raise it; that is
+// rare, and it can only turn a failure into a pass, never the reverse.
+func whoCalls(base, token string) (int64, error) {
+	var st daemonStatus
+	ctx, cancel := context.WithTimeout(context.Background(), controlTimeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/v1/status", nil)
+	if err != nil {
+		return 0, err
 	}
-	return s
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err := controlClient().Do(req)
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		return 0, fmt.Errorf("status %d", resp.StatusCode)
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&st); err != nil {
+		return 0, err
+	}
+	if st.WhoCalls == nil {
+		return 0, errors.New("the running daemon is older than this mairc and cannot count tool calls: restart it")
+	}
+	return *st.WhoCalls, nil
+}
+
+// lastLineOf is the last non-empty line a CLI printed, which is where it says why it stopped.
+func lastLineOf(s string) string {
+	lines := strings.Split(strings.TrimSpace(s), "\n")
+	return strings.TrimSpace(lines[len(lines)-1])
 }
 
 // askSpend returns the confirmation asked before each live run: the run spends the user's tokens, so it is said out
@@ -679,7 +716,8 @@ func askSpend(stdin io.Reader, out io.Writer, yes bool) func(string) bool {
 		if yes {
 			return true
 		}
-		_, _ = fmt.Fprintf(out, "run %s once to check delivery? It calls the mairc tool once and spends your tokens [y/N] ", cli)
+		_, _ = fmt.Fprintf(out, "run %s once to check delivery? It runs in an empty temporary folder with tool approval off, "+
+			"calls the mairc tool once and spends your tokens [y/N] ", cli)
 		line, err := r.ReadString('\n')
 		if err != nil && line == "" {
 			return false

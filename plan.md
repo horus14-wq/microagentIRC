@@ -173,7 +173,8 @@ Recommended wiring (what `mairc install` writes for Claude Code): `SessionStart`
     `X-Mairc-Seat`.
   - `POST /v1/hook` — §7.
   - `POST /v1/reload` — re-read `config.json`.
-  - `GET /v1/status` — `{"version","uptime_s","agents","sessions"}` for `mairc status`.
+  - `GET /v1/status` — `{"version","uptime_s","agents","sessions","who_calls"}` for `mairc status` and
+    `mairc doctor --live`.
   - `GET /v1/watch` — held open by each shim; its end drops the shim's session (bead `mairc-648`).
   - `GET /healthz` — `ok`.
 - **MCP subset**, protocol version `2025-06-18`: `initialize`, `notifications/initialized`, `ping`,

@@ -467,13 +467,22 @@ func TestStatus(t *testing.T) {
 	if got := call(t, f.h, a, "irc_name", `{"name":"erin"}`); got != "you are erin" {
 		t.Fatal(got)
 	}
+	// who_calls counts irc_who calls and nothing else (mairc-hyl: `mairc doctor --live` watches it rise).
+	for range 2 {
+		if got := call(t, f.h, a, "irc_who", `{}`); got != "erin" {
+			t.Fatal(got)
+		}
+	}
+	if got := call(t, f.h, a, "irc_read", `{}`); got != "nothing new" {
+		t.Fatal(got)
+	}
 	f.clock.add(90*time.Second + 400*time.Millisecond)
 	cases := []struct {
 		name, method string
 		wantCode     int
 		wantBody     string
 	}{
-		{"GET", http.MethodGet, http.StatusOK, `{"version":"test","uptime_s":90,"agents":1,"sessions":2}`},
+		{"GET", http.MethodGet, http.StatusOK, `{"version":"test","uptime_s":90,"agents":1,"sessions":2,"who_calls":2}`},
 		{"POST", http.MethodPost, http.StatusMethodNotAllowed, ""},
 	}
 	for _, tc := range cases {
@@ -517,7 +526,7 @@ func TestProtocolDoc(t *testing.T) {
 	for _, s := range []string{
 		"Authorization: Bearer", headerSession, headerSeat, headerPid, headerHookSession, "hook_session",
 		"`200`", "`202`", "`204`", "`400`", "`401`", "`404`", "`405`", "`413`",
-		"`" + joinLine + "`", `{"version":"...","uptime_s":N,"agents":N,"sessions":N}`,
+		"`" + joinLine + "`", `{"version":"...","uptime_s":N,"agents":N,"sessions":N,"who_calls":N}`,
 		// The hook body gained `session` and `claimed` (bead mairc-seat-0fk).
 		`{"pids":[int,...],"seat":"...","name":"...","event":"...","session":"...","claimed":"..."}`,
 	} {

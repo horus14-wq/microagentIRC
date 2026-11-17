@@ -143,11 +143,13 @@ next start.
 `200`, `Content-Type: application/json`:
 
 ```json
-{"version":"...","uptime_s":N,"agents":N,"sessions":N}
+{"version":"...","uptime_s":N,"agents":N,"sessions":N,"who_calls":N}
 ```
 
 `uptime_s` is whole seconds since start, `agents` the names seen within `keep_hours` (as `irc_who` lists them, at
-most 50), `sessions` the live MCP sessions.
+most 50), `sessions` the live MCP sessions, `who_calls` the `irc_who` calls served since start. `mairc doctor
+--live` asks a CLI for one `irc_who` call and takes a higher `who_calls` afterwards as the call arriving; the
+session count cannot show that, because a headless run's session is dropped when its shim exits.
 
 ### `GET /v1/watch`
 

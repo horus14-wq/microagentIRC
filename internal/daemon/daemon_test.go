@@ -117,7 +117,7 @@ func TestRun(t *testing.T) {
 	}{
 		{"healthz", "/healthz", "", http.StatusOK, "ok"},
 		{"status needs the token", "/v1/status", "", http.StatusUnauthorized, ""},
-		{"status", "/v1/status", token, http.StatusOK, `{"version":"test","uptime_s":0,"agents":0,"sessions":0}`},
+		{"status", "/v1/status", token, http.StatusOK, `{"version":"test","uptime_s":0,"agents":0,"sessions":0,"who_calls":0}`},
 	}
 	for _, st := range steps {
 		t.Run(st.name, func(t *testing.T) {

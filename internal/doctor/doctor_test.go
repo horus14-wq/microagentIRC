@@ -236,7 +236,7 @@ func TestLiveRunThatDoesNotReachIsAFailure(t *testing.T) {
 	if code != 1 {
 		t.Fatalf("exit = %d, want 1", code)
 	}
-	if !strings.Contains(b.String(), "live claude: it ran but no session reached the daemon") {
+	if !strings.Contains(b.String(), "live claude: it ran but its tool call did not reach the daemon") {
 		t.Errorf("output lacks the not-reached line:\n%s", b.String())
 	}
 }
@@ -260,14 +260,56 @@ func TestLiveRunDeclinedIsSkippedNotAFailure(t *testing.T) {
 	}
 }
 
-func TestLiveCommandOnlyForRecordedCLIs(t *testing.T) {
-	for _, cli := range []string{"claude", "codex", "opencode"} {
-		if _, ok := LiveCommand(cli); !ok {
-			t.Errorf("LiveCommand(%q) has no entry", cli)
+// mairc-hyl: each CLI with a recorded headless command gets the prompt as one argument, in the place that CLI reads
+// it (Grok and Devin take it right after -p, the others last), and the flag that lets one MCP tool call through
+// without a person. A CLI without a recorded command has none, and the doctor does not guess.
+func TestLiveCommandPerCLI(t *testing.T) {
+	const prompt = "Call the mairc tool irc_who once."
+	want := map[string][]string{
+		"claude":      {"claude", "-p", prompt, "--model", "haiku", "--allowedTools", "mcp__mairc"},
+		"codex":       {"codex", "exec", "--skip-git-repo-check", "--dangerously-bypass-approvals-and-sandbox", prompt},
+		"grok":        {"grok", "-p", prompt, "--always-approve"},
+		"devin":       {"devin", "--respect-workspace-trust", "false", "--permission-mode", "dangerous", "-p", prompt},
+		"opencode":    {"opencode", "run", prompt},
+		"prime-agent": {"prime-agent", "-p", prompt},
+	}
+	for cli, args := range want {
+		got, ok := LiveCommand(cli, prompt)
+		if !ok || strings.Join(got, "\x00") != strings.Join(args, "\x00") {
+			t.Errorf("LiveCommand(%q) = %q, %v; want %q", cli, got, ok, args)
 		}
 	}
-	if _, ok := LiveCommand("devin"); ok {
-		t.Error("LiveCommand(devin) guessed a command")
+	for _, cli := range []string{"agy", "pi", "unknown"} {
+		if got, ok := LiveCommand(cli, prompt); ok {
+			t.Errorf("LiveCommand(%q) guessed %q", cli, got)
+		}
+	}
+}
+
+// mairc-hyl: a CLI the doctor cannot run headless is listed as not checked. It is not asked about, not run and not
+// counted as a problem; before, a healthy machine with such a CLI ended with "N problems" and exit 1.
+func TestLiveRunWithoutARecordedCommandIsNotCheckedAndNotAProblem(t *testing.T) {
+	p := healthyDaemon()
+	p.Live = func(cli string) (bool, error) {
+		if cli != "claude" {
+			t.Fatalf("live ran %q, which has no recorded command", cli)
+		}
+		return true, nil
+	}
+	asked := []string{}
+	var b strings.Builder
+	code := Run(Options{
+		Out: &b, CLIs: []install.Status{fake(t, "claude", true, true, false), fake(t, "agy", true, false, false)},
+		Probes: p, Live: true, Spend: func(cli string) bool { asked = append(asked, cli); return true },
+	})
+	if code != 0 || !strings.Contains(b.String(), "everything checked is healthy") {
+		t.Fatalf("exit = %d, want 0 and a healthy summary; output:\n%s", code, b.String())
+	}
+	if strings.Join(asked, ",") != "claude" {
+		t.Fatalf("asked about %v, want only claude", asked)
+	}
+	if !strings.Contains(b.String(), "live agy: not checked — mairc doctor has no headless command recorded for it") {
+		t.Errorf("output lacks the not-checked line:\n%s", b.String())
 	}
 }
 

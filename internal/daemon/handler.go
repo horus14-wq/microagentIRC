@@ -104,7 +104,8 @@ type server struct {
 	pids map[pidKey]map[string]int
 	// bound maps an agent CLI session id to the name its hook runs for. It is learned (from a process id, a seat
 	// or the result of irc_name), kept in memory for the hot path and stored through bindings.
-	attach sync.Mutex // serializes newSession; taken before mu, never while holding it
+	whoCalls int64      // irc_who calls served since start (status.WhoCalls); guarded by mu
+	attach   sync.Mutex // serializes newSession; taken before mu, never while holding it
 	// stopping is closed when the daemon shuts down, to end the open watches.
 	stopping chan struct{}
 	stopOnce sync.Once
@@ -270,8 +271,13 @@ func (s *server) serveMCP(w http.ResponseWriter, r *http.Request) {
 	if sess.Name != before {
 		s.rename(r.Context(), id, sess.Name)
 	}
-	if isNameCall(body) {
+	switch toolCalled(body) {
+	case "irc_name":
 		s.noteNamed(id, sess.Name)
+	case "irc_who":
+		s.mu.Lock()
+		s.whoCalls++
+		s.mu.Unlock()
 	}
 	if out == nil {
 		w.WriteHeader(http.StatusAccepted)
@@ -338,15 +344,18 @@ func isInitialize(body []byte) bool {
 	return len(msg.ID) > 0 && string(msg.ID) != "null"
 }
 
-// isNameCall reports whether the body is a tools/call of irc_name.
-func isNameCall(body []byte) bool {
+// toolCalled returns the tool a tools/call body names, or "" for any other message.
+func toolCalled(body []byte) string {
 	var msg struct {
 		Method string `json:"method"`
 		Params struct {
 			Name string `json:"name"`
 		} `json:"params"`
 	}
-	return json.Unmarshal(body, &msg) == nil && msg.Method == "tools/call" && msg.Params.Name == "irc_name"
+	if json.Unmarshal(body, &msg) != nil || msg.Method != "tools/call" {
+		return ""
+	}
+	return msg.Params.Name
 }
 
 // newSession creates a session from the shim's headers and returns its id and a copy of what the tools see.
@@ -793,6 +802,10 @@ type status struct {
 	UptimeS  int64  `json:"uptime_s"`
 	Agents   int    `json:"agents"`
 	Sessions int    `json:"sessions"`
+	// WhoCalls counts the irc_who calls served since the daemon started. `mairc doctor --live` asks a CLI for one
+	// such call and looks for the count to rise: the session count cannot show it, because a headless run's session
+	// is dropped the moment its shim exits.
+	WhoCalls int64 `json:"who_calls"`
 }
 
 func (s *server) serveStatus(w http.ResponseWriter, r *http.Request) {
@@ -803,13 +816,14 @@ func (s *server) serveStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.mu.Lock()
-	sessions := len(s.sessions)
+	sessions, whoCalls := len(s.sessions), s.whoCalls
 	s.mu.Unlock()
 	out, err := json.Marshal(status{
 		Version:  s.version,
 		UptimeS:  int64(s.clock.Now().Sub(s.start) / time.Second),
 		Agents:   len(names),
 		Sessions: sessions,
+		WhoCalls: whoCalls,
 	})
 	if err != nil {
 		s.logf("error: status: %v", err)
