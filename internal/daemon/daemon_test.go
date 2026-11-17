@@ -18,7 +18,7 @@ import (
 // freeAddr returns a loopback address with a port that was free a moment ago.
 func freeAddr(t *testing.T) string {
 	t.Helper()
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	ln, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -151,7 +151,7 @@ func TestRun(t *testing.T) {
 	if _, err := os.Stat(paths.PID); !os.IsNotExist(err) {
 		t.Fatalf("pid file left behind: %v", err)
 	}
-	if _, err := net.Dial("tcp", addr); err == nil {
+	if _, err := (&net.Dialer{}).DialContext(t.Context(), "tcp", addr); err == nil {
 		t.Fatal("still listening after stop")
 	}
 }

@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -84,10 +85,10 @@ func newFixture(t testing.TB, settings core.Settings) *fixture {
 	t.Cleanup(func() { _ = st.Close() })
 	clk := newClock()
 	next := 0
-	service := chat.New(st, clk, settings, func(n int) int { next++; return next % n })
+	service := chat.New(t.Context(), st, clk, settings, func(n int) int { next++; return next % n })
 	var logs []string
 	var mu sync.Mutex
-	logf := func(format string, args ...any) {
+	logf := func(format string, _ ...any) {
 		mu.Lock()
 		logs = append(logs, format)
 		mu.Unlock()
@@ -102,7 +103,7 @@ func newFixture(t testing.TB, settings core.Settings) *fixture {
 
 // do sends one request with the token unless headers set Authorization themselves.
 func do(h http.Handler, method, path string, headers map[string]string, body string) *httptest.ResponseRecorder {
-	req := httptest.NewRequest(method, path, strings.NewReader(body))
+	req := httptest.NewRequestWithContext(context.Background(), method, path, strings.NewReader(body))
 	req.Header.Set("Authorization", "Bearer "+testToken)
 	for k, v := range headers {
 		if v == "" {
@@ -531,7 +532,7 @@ func BenchmarkHookEmpty(b *testing.B) {
 	body := []byte(`{"pids":[4242],"seat":"seat-b","event":"PostToolUse"}`)
 	b.ReportAllocs()
 	for b.Loop() {
-		req := httptest.NewRequest(http.MethodPost, "/v1/hook", bytes.NewReader(body))
+		req := httptest.NewRequestWithContext(b.Context(), http.MethodPost, "/v1/hook", bytes.NewReader(body))
 		req.Header.Set("Authorization", "Bearer "+testToken)
 		rec := httptest.NewRecorder()
 		f.h.ServeHTTP(rec, req)
