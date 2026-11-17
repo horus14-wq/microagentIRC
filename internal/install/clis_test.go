@@ -178,7 +178,11 @@ func TestJSONWriterNestedEntry(t *testing.T) {
 // Every row, both scopes: the files it names keep other content, gain mairc once, a second run changes nothing, and
 // uninstall restores the original bytes.
 func TestEveryRowMergesIdempotentlyAndUninstallsExactly(t *testing.T) {
-	const fixture = "{\n  \"keep\": {\n    \"a\": 1\n  }\n}\n"
+	// One fixture per format, and the prefix the merged file must still start with.
+	fixtures := map[string]struct{ content, keptPrefix string }{
+		"json":  {"{\n  \"keep\": {\n    \"a\": 1\n  }\n}\n", "{\n  \"keep\": {\n    \"a\": 1\n  },\n"},
+		"block": {"model = \"o4\"\n\n[mcp_servers.other]\ncommand = \"other\"\n", "model = \"o4\"\n\n[mcp_servers.other]\ncommand = \"other\"\n\n"},
+	}
 	for _, c := range clis() {
 		for _, scope := range []string{"user", "project"} {
 			t.Run(c.name+"/"+scope, func(t *testing.T) {
@@ -186,14 +190,14 @@ func TestEveryRowMergesIdempotentlyAndUninstallsExactly(t *testing.T) {
 				o := Options{Binary: testBinary, Scope: scope, Home: home, Project: project, Only: []string{c.name}}
 				files := c.files(scope, o)
 				for _, f := range files {
-					write(t, f.path, fixture, 0o600)
+					write(t, f.path, fixtures[f.format].content, 0o600)
 				}
 				if code, out := runRaw(o); code != 0 || strings.Count(out, "updated ") != len(files) {
 					t.Fatalf("install = %d, out %q", code, out)
 				}
 				for _, f := range files {
 					got := string(read(t, f.path))
-					if !strings.HasPrefix(got, "{\n  \"keep\": {\n    \"a\": 1\n  },\n") || !strings.Contains(got, testBinary) {
+					if !strings.HasPrefix(got, fixtures[f.format].keptPrefix) || !strings.Contains(got, testBinary) {
 						t.Fatalf("%s lost the fixture or lacks mairc:\n%s", f.path, got)
 					}
 				}
@@ -205,7 +209,7 @@ func TestEveryRowMergesIdempotentlyAndUninstallsExactly(t *testing.T) {
 					t.Fatalf("uninstall = %d", code)
 				}
 				for _, f := range files {
-					if got := string(read(t, f.path)); got != fixture {
+					if got := string(read(t, f.path)); got != fixtures[f.format].content {
 						t.Fatalf("uninstall did not restore %s:\n%s", f.path, got)
 					}
 				}
@@ -235,5 +239,72 @@ func TestNewRowsWriteTheirDocumentedEntry(t *testing.T) {
 				t.Fatalf("%s:\n%s\nwant:\n%s", tc.rel, got, tc.want)
 			}
 		})
+	}
+}
+
+func TestBlockWriter(t *testing.T) {
+	spec := tomlServerBlock()
+	begin, end := tomlMarkers()
+	block := func(bin string) string { return begin + "\n" + tomlMCPServer(bin) + end + "\n" }
+
+	// A fresh file is exactly the block.
+	out, edited, problem := applyBlock(nil, spec, "/opt/mairc/bin/mairc", false)
+	want := begin + "\n[mcp_servers.mairc]\ncommand = \"/opt/mairc/bin/mairc\"\nargs = [\"stdio\"]\n" + end + "\n"
+	if !edited || problem != "" || string(out) != want {
+		t.Fatalf("fresh = %q, %v, %q", out, edited, problem)
+	}
+
+	// A new binary path replaces the block in place; content after it is kept.
+	before := "a = 1\n\n" + block("/old/mairc") + "[after]\nb = 2\n"
+	out, edited, _ = applyBlock([]byte(before), spec, "/new/mairc", false)
+	if !edited || string(out) != "a = 1\n\n"+block("/new/mairc")+"[after]\nb = 2\n" {
+		t.Fatalf("update in place = %q", out)
+	}
+	out, _, _ = applyBlock(out, spec, "", true)
+	if string(out) != "a = 1\n[after]\nb = 2\n" {
+		t.Fatalf("uninstall from the middle = %q", out)
+	}
+
+	// Refusals: a hand-written table of ours, and a begin marker without an end.
+	for name, raw := range map[string]string{
+		"hand-written table": "[mcp_servers.mairc]\ncommand = \"x\"\n",
+		"unterminated block": "a = 1\n" + begin + "\n[mcp_servers.mairc]\n",
+	} {
+		if _, _, problem := applyBlock([]byte(raw), spec, testBinary, false); problem == "" {
+			t.Fatalf("%s: no refusal", name)
+		}
+	}
+
+	// A Windows path is a valid TOML basic string.
+	if got := tomlString(`C:\Program Files\mairc\mairc.exe`); got != `"C:\\Program Files\\mairc\\mairc.exe"` {
+		t.Fatalf("tomlString = %s", got)
+	}
+	if got := tomlString("a\"b\x01"); got != `"a\"b\u0001"` {
+		t.Fatalf("tomlString escapes = %s", got)
+	}
+
+	// The one documented inexact case: a file without a final newline gets one.
+	out, _, _ = applyBlock([]byte("a = 1"), spec, testBinary, false)
+	out, _, _ = applyBlock(out, spec, "", true)
+	if string(out) != "a = 1\n" {
+		t.Fatalf("no-newline file after uninstall = %q", out)
+	}
+}
+
+// The TOML rows write the block, exactly, into a fresh file.
+func TestTOMLRowsWriteTheBlock(t *testing.T) {
+	begin, end := tomlMarkers()
+	want := begin + "\n" + tomlMCPServer(testBinary) + end + "\n"
+	for _, tc := range []struct{ cli, rel string }{
+		{"codex", filepath.Join(".codex", "config.toml")},
+		{"grok", filepath.Join(".grok", "config.toml")},
+	} {
+		home := t.TempDir()
+		if code, out := runRaw(Options{Binary: testBinary, Home: home, Only: []string{tc.cli}}); code != 0 {
+			t.Fatalf("%s install = %d, %q", tc.cli, code, out)
+		}
+		if got := string(read(t, filepath.Join(home, tc.rel))); got != want {
+			t.Fatalf("%s:\n%s", tc.rel, got)
+		}
 	}
 }

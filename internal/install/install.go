@@ -91,10 +91,7 @@ func Run(o Options) int {
 	var files []*target
 	for _, c := range selected {
 		for _, f := range c.files(scope, o) {
-			f := f
-			files = append(files, &target{path: f.path, apply: func(root *node) (bool, bool) {
-				return applyJSON(root, f, o.Binary, o.Uninstall)
-			}})
+			files = append(files, &target{path: f.path, spec: f})
 		}
 	}
 	// Read, check and edit every file in memory before writing any: one unparsable file leaves all untouched.
@@ -110,9 +107,9 @@ func Run(o Options) int {
 	}
 	var changed []*target
 	for _, f := range files {
-		edited, ok := f.apply(f.root)
-		if !ok {
-			_, _ = fmt.Fprintf(out, "cannot parse %s: fix it or use --print\n", f.path)
+		edited, problem := f.apply(o.Binary, o.Uninstall)
+		if problem != "" {
+			_, _ = fmt.Fprintln(out, problem)
 			return 1
 		}
 		if edited {
@@ -121,7 +118,7 @@ func Run(o Options) int {
 	}
 	if o.DryRun {
 		for _, f := range changed {
-			_, _ = fmt.Fprintf(out, "would update %s\n%s", f.path, shortDiff(f.raw, f.root.bytes()))
+			_, _ = fmt.Fprintf(out, "would update %s\n%s", f.path, shortDiff(f.raw, f.out))
 		}
 	} else if len(changed) > 0 && o.Confirm != nil && !o.Confirm(paths(changed)) {
 		_, _ = fmt.Fprintln(out, "nothing changed")
@@ -233,18 +230,23 @@ func usage(o Options, scope string) string {
 // target is one file the installer may change.
 type target struct {
 	path    string
-	apply   func(root *node) (edited, ok bool)
-	root    *node
-	raw     []byte
+	spec    fileSpec
+	root    *node  // the parsed document, for the JSON format
+	raw     []byte // the file as read (empty when missing)
+	out     []byte // the file as it will be written
 	existed bool
 	mode    fs.FileMode
 }
 
-// load reads the file; a missing file is an empty object, a file that is not a JSON object is errNotJSON.
+// load reads the file. A missing file is empty (an empty object for JSON); a JSON file that is not a JSON object is
+// errNotJSON. Text formats are kept as bytes: their writer never re-encodes the user's content.
 func (t *target) load() error {
 	info, err := os.Stat(t.path)
 	if errors.Is(err, fs.ErrNotExist) {
-		t.root, t.mode = &node{kind: objectNode}, 0o600
+		t.mode = 0o600
+		if t.spec.format == "json" {
+			t.root = &node{kind: objectNode}
+		}
 		return nil
 	}
 	if err != nil {
@@ -254,15 +256,39 @@ func (t *target) load() error {
 	if err != nil {
 		return err
 	}
-	root, err := parse(raw)
-	if err != nil {
-		return err
+	if t.spec.format == "json" {
+		root, err := parse(raw)
+		if err != nil {
+			return err
+		}
+		if root.kind != objectNode {
+			return errNotJSON
+		}
+		t.root = root
 	}
-	if root.kind != objectNode {
-		return errNotJSON
-	}
-	t.root, t.raw, t.existed, t.mode = root, raw, true, info.Mode().Perm()
+	t.raw, t.existed, t.mode = raw, true, info.Mode().Perm()
 	return nil
+}
+
+// apply runs the file's format writer and sets out. problem is a one-line refusal; nothing may be written then.
+func (t *target) apply(binary string, uninstall bool) (edited bool, problem string) {
+	switch t.spec.format {
+	case "json":
+		edited, ok := applyJSON(t.root, t.spec, binary, uninstall)
+		if !ok {
+			return false, fmt.Sprintf("cannot parse %s: fix it or use --print", t.path)
+		}
+		t.out = t.root.bytes()
+		return edited, ""
+	case "block":
+		out, edited, problem := applyBlock(t.raw, t.spec.block, binary, uninstall)
+		if problem != "" {
+			return false, fmt.Sprintf("%s %s", t.path, problem)
+		}
+		t.out = out
+		return edited, ""
+	}
+	return false, fmt.Sprintf("cannot parse %s: unknown format %s", t.path, t.spec.format)
 }
 
 // store keeps a one-time backup of the original content, then writes atomically: a temporary file in the same
@@ -284,7 +310,7 @@ func (t *target) store() error {
 		return err
 	}
 	tmpName := tmp.Name()
-	_, werr := tmp.Write(t.root.bytes())
+	_, werr := tmp.Write(t.out)
 	if werr == nil {
 		werr = tmp.Chmod(t.mode)
 	}

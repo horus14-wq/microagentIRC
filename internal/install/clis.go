@@ -19,9 +19,10 @@ type cliSpec struct {
 // A fileSpec is one configuration file and what mairc owns in it.
 type fileSpec struct {
 	path   string
-	format string     // "json" (the JSON writer: writer_json.go)
-	server *entrySpec // the MCP server entry, or nil
-	hooks  *hookSpec  // Claude-style hook entries, or nil
+	format string     // "json" (writer_json.go) or "block" (writer_block.go: TOML and instruction files)
+	server *entrySpec // JSON: the MCP server entry, or nil
+	hooks  *hookSpec  // JSON: Claude-style hook entries, or nil
+	block  *blockSpec // block: mairc's marked block
 }
 
 // An entrySpec is one named entry inside an object reached by keyPath, e.g. mcpServers.mairc.
@@ -41,7 +42,53 @@ type hookSpec struct {
 
 // clis returns the supported CLIs in the order they are reported.
 func clis() []cliSpec {
-	return []cliSpec{claudeCode(), devin(), primeAgent()}
+	return []cliSpec{claudeCode(), codex(), grok(), devin(), primeAgent()}
+}
+
+// tomlServerBlock is the marked [mcp_servers.mairc] block for a TOML config.
+func tomlServerBlock() *blockSpec {
+	begin, end := tomlMarkers()
+	return &blockSpec{begin: begin, end: end, body: tomlMCPServer, conflicts: []string{"[mcp_servers.mairc]"}}
+}
+
+// codex is OpenAI Codex CLI (docs/compat.md, "OpenAI Codex CLI", 0.169.0): MCP servers in ~/.codex/config.toml (or
+// <project>/.codex/config.toml, read only in trusted projects), table [mcp_servers.<name>] with command/args. MCP
+// only: Codex runs a hook only after the user trusts its exact hash in /hooks, which an installer cannot do.
+func codex() cliSpec {
+	return cliSpec{
+		name:     "codex",
+		binaries: []string{"codex"},
+		dirs:     []string{".codex"},
+		files: func(scope string, o Options) []fileSpec {
+			base := o.Home
+			if scope == "project" {
+				base = o.Project
+			}
+			return []fileSpec{{
+				path: filepath.Join(base, ".codex", "config.toml"), format: "block", block: tomlServerBlock(),
+			}}
+		},
+	}
+}
+
+// grok is Grok Build (docs/compat.md, "Grok Build", 1.0.70): MCP servers in ~/.grok/config.toml (or
+// <project>/.grok/config.toml), table [mcp_servers.<name>] with command/args. MCP only: Grok also runs the hooks in
+// Claude Code's settings files (trusted folders), so the Claude row's hook reaches Grok seats.
+func grok() cliSpec {
+	return cliSpec{
+		name:     "grok",
+		binaries: []string{"grok"},
+		dirs:     []string{".grok"},
+		files: func(scope string, o Options) []fileSpec {
+			base := o.Home
+			if scope == "project" {
+				base = o.Project
+			}
+			return []fileSpec{{
+				path: filepath.Join(base, ".grok", "config.toml"), format: "block", block: tomlServerBlock(),
+			}}
+		},
+	}
 }
 
 // devin is Devin CLI (docs/compat.md, "Devin CLI", 3000.13.4): MCP servers in ~/.config/devin/mcp_config.json (user;
