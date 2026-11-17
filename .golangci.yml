@@ -88,6 +88,10 @@ linters:
       - linters: [gosec]
         path: '^internal/names/'
         text: G404
+      # This test loosens a database to 0644 on purpose, to prove Open tightens files an older version created.
+      - linters: [gosec]
+        path: '^internal/store/private_unix_test\.go$'
+        text: G302
       # The CLI and end-to-end tests deliberately invoke subprocesses.
       - linters: [gosec]
         path: '^(cmd/mairc/|e2e/|internal/e2e/)'

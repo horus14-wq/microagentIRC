@@ -11,6 +11,8 @@ import (
 	_ "embed" // the schema and the statements are embedded .sql files
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"time"
@@ -36,8 +38,29 @@ type Store struct {
 
 // Open opens the database file, creating it if needed, applies the schema and prepares every statement.
 func Open(ctx context.Context, path string) (*Store, error) {
+	if err := ensurePrivate(path); err != nil {
+		return nil, err
+	}
 	return open(ctx, fileURI(path, runtime.GOOS == "windows")+"?_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)"+
 		"&_pragma=foreign_keys(ON)&_pragma=busy_timeout(2000)")
+}
+
+// ensurePrivate creates the database file 0600 before SQLite opens it, and tightens a database (and WAL/SHM files)
+// that an earlier version left 0644. SQLite gives the -wal and -shm files it creates the main file's permissions.
+func ensurePrivate(path string) error {
+	f, err := os.OpenFile(filepath.Clean(path), os.O_RDWR|os.O_CREATE, 0o600)
+	if err != nil {
+		return fmt.Errorf("create database: %w", err)
+	}
+	if err := f.Close(); err != nil {
+		return fmt.Errorf("create database: %w", err)
+	}
+	for _, p := range []string{path, path + "-wal", path + "-shm"} {
+		if err := os.Chmod(p, 0o600); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("make %s private: %w", filepath.Base(p), err)
+		}
+	}
+	return nil
 }
 
 // fileURI is path as an SQLite URI filename (sqlite.org/uri.html). Only the characters that would end or alter the
