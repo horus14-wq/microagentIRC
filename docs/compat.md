@@ -7,7 +7,7 @@ Bearer token, and a `mairc hook` that prints nothing when nothing is new) can re
 Researched 2026-11-17 against the official documentation (URLs and read date in each section) **and** the
 binaries installed on this host. Tags: **[DOC]** = official docs, **[BIN]** = the installed binary (help output,
 config, source shipped with it, or a sandbox run), **[UNV]** = unverified, with the reason. Real CLI configuration
-was only read; every experiment ran under a throwaway HOME in `/data/tmp/proudlion-compat/<cli>-sandbox/`. Model
+was only read; every experiment ran under a throwaway HOME in `<scratch>/<cli>-sandbox/`. Model
 calls: one tiny headless prompt each for Claude Code and Devin; none for the others (no credentials on this host,
 or quota). These tools change fast: re-check before relying on a cell.
 
@@ -19,11 +19,11 @@ Five more CLIs — Pi, Goose, Cursor CLI, GitHub Copilot CLI and Amp — are in 
 |---|---|---|---|---|---|---|---|
 | Claude Code 2.1.326 [BIN] | user+local: `~/.claude.json` `mcpServers` (local = under `projects["<abs path>"].mcpServers`); project: `<repo>/.mcp.json` `mcpServers` [DOC][BIN] | yes (no `type`, or `"type":"stdio"`; `command`/`args`/`env`) [DOC][BIN] | yes: `"type":"http"` (alias `streamable-http`) + `url` + `headers` map, `${VAR}` expansion; `claude mcp add -t http -H "Authorization: Bearer …"` [DOC][BIN] | `hooks` in settings.json (`~/.claude/settings.json`, `.claude/settings.json`, `.claude/settings.local.json`, `--settings`); 33 events incl. SessionStart, UserPromptSubmit, PostToolUse, PostToolBatch, Stop [DOC][BIN] | plain stdout: only SessionStart / UserPromptSubmit (+UserPromptExpansion, PostModelSwitch); PostToolUse/PostToolBatch/Stop need JSON `hookSpecificOutput.additionalContext`; tested: PostToolUse plain dropped, JSON delivered [DOC][BIN] | stdin `session_id` = env `CLAUDE_CODE_SESSION_ID` (also in stdio MCP children); `CLAUDE_PID`; chain hook -> `/bin/sh -c` -> claude [DOC][BIN] | CLAUDE.md chain (managed, `~/.claude/CLAUDE.md`, `./CLAUDE.md` / `.claude/CLAUDE.md`, `CLAUDE.local.md`); AGENTS.md read natively only if no CLAUDE.md (default) [DOC] |
 | OpenAI Codex CLI 0.169.0 [BIN] | `~/.codex/config.toml` (or `$CODEX_HOME/config.toml`) + trusted-project `.codex/config.toml`, table `[mcp_servers.<name>]` [DOC][BIN] | yes: `command`/`args`/`env`/`env_vars`/`cwd` [DOC][BIN] | yes: `url` + `bearer_token_env_var` (Authorization: Bearer) + `http_headers` / `env_http_headers` [DOC][BIN] | Claude-style hooks (`hooks.json` or `[hooks]`; SessionStart, UserPromptSubmit, PreToolUse, PostToolUse, Stop, ... 14 events), feature `hooks` stable+on, hash trust required [DOC][BIN]; legacy `notify` (agent-turn-complete only) [DOC] | SessionStart + UserPromptSubmit: plain stdout -> developer message [DOC][BIN]; Pre/PostToolUse: only JSON `hookSpecificOutput.additionalContext` [DOC][UNV-bin]; Stop: `decision:block` reason -> new prompt [DOC]; notify: no [DOC-silent][UNV] | stdin JSON `session_id` (= thread id) + `transcript_path`; hook `$PPID` = codex native pid; no CODEX_* session env var [BIN] | AGENTS.override.md / AGENTS.md: `$CODEX_HOME` + project root..cwd, concatenated; CLAUDE.md only via `project_doc_fallback_filenames` [DOC][BIN] |
-| Google Antigravity CLI `agy` 1.4.2 [BIN] | `~/.gemini/config/mcp_config.json` (global) / `<workspace>/.agents/mcp_config.json`, key `mcpServers` [DOC][BIN] | yes: `command`/`args`/`env`/`cwd` [DOC][BIN] | yes, Streamable HTTP only: `serverUrl` (`url` also accepted) + `headers` object; `agy mcp add -H "Authorization: Bearer …" name URL` [DOC][BIN] | `hooks.json` (`~/.gemini/config/` or `.agents/` or plugin), `type:"command"`; events SessionStart, PreToolUse, PostToolUse, PreInvocation, PostInvocation, Stop [DOC][BIN] | only via JSON `injectSteps` on PreInvocation (before every model call, i.e. after each tool result), PostInvocation, SessionStart; Stop `decision:"continue"`+`reason`; PostToolUse output is `{}` (no documented injection); plain-text stdout: [UNV] [DOC] | `conversationId` (+`transcriptPath`) in stdin JSON [DOC]; hook env vars / pid chain [UNV] (no auth in sandbox) | `AGENTS.md` and `GEMINI.md` (+ `.agents/AGENTS.md`, `.agents/rules/*.md`) in cwd and parents up to repo root; global `~/.gemini/{AGENTS,GEMINI}.md`, `~/.gemini/config/…`; cumulative [DOC] |
+| Google Antigravity CLI `agy` 1.5.10 [BIN] | `~/.gemini/config/mcp_config.json` (global) / `<workspace>/.agents/mcp_config.json`, key `mcpServers` [DOC][BIN 1.5.10] | yes: `command`/`args`/`env`/`cwd`; `agy mcp add [-t stdio] [-e K=V] <name> <command> [args...]` [DOC][BIN 1.5.10] | yes, Streamable HTTP only: `serverUrl` (`url` also accepted) + `headers` object; `agy mcp add -t http -H "Authorization: Bearer …" name URL` [DOC][BIN] | `hooks.json` (`~/.gemini/config/` or `.agents/` or plugin), `type:"command"`; events SessionStart, PreToolUse, PostToolUse, PreInvocation, PostInvocation, Stop; 1.5.5 converts imported plugins' hooks [DOC][BIN][release notes] | only via JSON `injectSteps` on PreInvocation (before every model call, i.e. after each tool result), PostInvocation, SessionStart; PostToolUse output is `{}`; mairc uses PreInvocation `injectSteps` (mairc-2b3, live 1.5.10; section (f) below) [DOC][BIN live] | `conversationId` (+`transcriptPath`), and from 1.5.4 `hookEventName`, `cwd`, `toolCall.id`, in stdin JSON [DOC][BIN live] | `AGENTS.md` and `GEMINI.md` (+ `.agents/AGENTS.md`, `.agents/rules/*.md`) in cwd and parents up to repo root; global `~/.gemini/{AGENTS,GEMINI}.md`, `~/.gemini/config/…`; cumulative [DOC] |
 | Google Gemini CLI 0.50.0 (legacy, see note) [BIN] | `~/.gemini/settings.json` (user) / `.gemini/settings.json` (project) / `/etc/gemini-cli/settings.json` (system), key `mcpServers` [DOC][BIN] | yes: `command`/`args`/`env`/`cwd` [DOC][BIN] | yes: `httpUrl` (or `url`+`"type":"http"`) + `headers` object; `gemini mcp add -t http -H "Authorization: Bearer …"` [DOC][BIN] | `hooks` in settings.json, `type:"command"`; events SessionStart, BeforeAgent, AfterAgent, BeforeModel, AfterModel, BeforeToolSelection, BeforeTool, AfterTool, PreCompress, Notification, SessionEnd [DOC][BIN] | only via JSON `hookSpecificOutput.additionalContext` on AfterTool (appended to tool result), BeforeAgent (appended to this turn's prompt), SessionStart; wrapped in `<hook_context>`; plain-text stdout goes to the USER as `systemMessage`, not the model [DOC][BIN] | `GEMINI_SESSION_ID` env + `session_id`/`transcript_path` on stdin; hook's parent pid = the gemini (bun) child process [BIN] | `GEMINI.md` (global `~/.gemini/`, cwd + ancestors to `.git`, subdirs, JIT); `context.fileName` can list `AGENTS.md` [DOC][BIN] |
 | Grok Build `grok` 1.0.70 (f50904eaee6c) | `~/.grok/config.toml` (or `$GROK_HOME/config.toml`) + project `.grok/config.toml`, table `[mcp_servers.<name>]`; also imports `~/.claude.json`, `.mcp.json`, `.cursor/mcp.json` [DOC][BIN] | yes: `command`/`args`/`env` [DOC][BIN] | yes: `url` + `headers = { Authorization = "Bearer …" }`; `grok mcp add -t http NAME URL -H "Authorization: Bearer …"` ("streamable HTTP") [DOC][BIN] | Claude-style command/http hooks: `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `Stop`, `StopCancelled`, `StopFailure`, `Notification`, `SessionEnd`, … in `~/.grok/hooks/*.json`, `.grok/hooks/*.json`, `[[hooks.<Event>]]` in config.toml, AND `~/.claude/settings.json` / `.claude/settings.json` [DOC][BIN] | only as JSON: `PostToolUse` / `PreToolUse` `hookSpecificOutput.additionalContext` (or PostToolUse `decision:"block"`+`reason`); `Stop` `decision:"block"` reason = new user message; NOT SessionStart (only `systemMessage`), NOT UserPromptSubmit (stdout discarded) [DOC]; plain-text stdout [UNV] | `GROK_SESSION_ID` env + `sessionId`/`session_id` on stdin; `GROK_HOOK_EVENT` tells it is Grok [DOC]; pid chain [UNV] | `AGENTS.md`, `Agents.md`, `AGENT.md`, `CLAUDE.md`, `Claude.md`, `CLAUDE.local.md` from `~/.grok`, `~/.claude`, repo root → cwd; `.grok/rules/*.md`; no `GROK.md` [DOC][BIN] |
 | Devin CLI 3000.13.4 [BIN] | `~/.config/devin/mcp_config.json` (user), `.devin/mcp_config.json` (project), `.devin/mcp_config.local.json` (local, default of `mcp add`); key `mcpServers` [DOC][BIN] | yes: `command`/`args`/`env` [DOC][BIN] | yes: `url` + `transport:"http"` (falls back to SSE on non-auth 4xx), `headers` object; `devin mcp add -H "Authorization: Bearer …"` [DOC][BIN] | JSON command hooks in `.devin/hooks.v1.json` (also `.claude/settings*.json`, `~/.claude/settings*.json`): PreToolUse, PostToolUse, PermissionRequest, UserPromptSubmit, Stop, PostCompaction, SessionStart, SessionEnd [DOC][BIN] | only as JSON `hookSpecificOutput.additionalContext` on SessionStart, UserPromptSubmit, PostToolUse; plain stdout is dropped [DOC][BIN: live test] | stdin `session_id` (slug, e.g. `fantasy-stoplight`), stable per session; env only `DEVIN_PROJECT_DIR`/`CLAUDE_PROJECT_DIR`; parent = `devin acp` child of the `devin` pane process; no tty [BIN] | `AGENTS.md`, `AGENTS.local.md`, `AGENT.md`, `CLAUDE.md`, `.windsurfrules`, `.devin/rules/*.md`, `.devin/global_rules.md`; global `~/.config/devin/AGENTS.md` + `~/.claude/CLAUDE.md` [DOC] |
-| OpenCode 1.19.3 [BIN] | `opencode.json(c)`, key `mcp` -> `{name: {type, ...}}`; global `~/.config/opencode/`, project root or `.opencode/` [DOC v1][BIN] | yes: `type:"local"`, `command:[...]`, `environment` [DOC v1][BIN] | yes: `type:"remote"`, `url`, `headers` (+`oauth:false`); Streamable HTTP first, SSE fallback [DOC v1][BIN] | no shell-command hooks; JS/TS plugins (`~/.config/opencode/plugins/`, `.opencode/plugins/`) with `tool.execute.after`, `event` (`session.idle`, `session.created`...), `chat.message`, `shell.env`, `experimental.chat.system.transform` [DOC v1][BIN] | not as raw stdout; a plugin can run `mairc hook` itself and inject: mutate `output.output` in `tool.execute.after` (tool result), push into `output.system` per LLM step, or `client.session.prompt` (`noReply`) [BIN][DOC partial][UNV live] | plugin: `input.sessionID` per hook + `process.pid` == `OPENCODE_PID`; tool shells inherit `OPENCODE=1`, `AGENT=1`, `OPENCODE_PID` [BIN] | `AGENTS.md` (walk up), else `CLAUDE.md`; global `~/.config/opencode/AGENTS.md`, else `~/.claude/CLAUDE.md`; plus `instructions` [DOC v1][BIN] |
+| OpenCode 2.3.0 [BIN] | `opencode.json(c)`, key `mcp.servers.<name>` (v2; "V2 does not place server names directly under `mcp`"); global `~/.config/opencode/`, project root or `.opencode/`. mairc still writes the v1 shape `mcp.mairc`, which 2.3.0 loads (mairc-cpm) [DOC][BIN live] | yes: `type:"local"`, `command:[exe, args...]`, `environment`, `cwd`, `timeout` [DOC] | yes: `type:"remote"`, `url`, `headers` [DOC] | no shell-command hooks; v2 plugins (default export `{id, setup(ctx)}`, auto-loaded from `~/.config/opencode/plugins/*.js` and `.opencode/plugins/`): `ctx.tool.hook("execute.before"\|"execute.after")`, `ctx.session.hook("context"\|"prompt"\|...)`, `ctx.event.subscribe()`, `ctx.shell.hook("create.before")` [DOC][BIN live] | yes through mairc's plugin: `execute.after` result `content` (persists) and `context` `system` (that request only); section "OpenCode v2 (2.3.0)" below [BIN live] | plugin events carry `sessionID`; the plugin runs in OpenCode's Node process, the MCP shim's parent [BIN live] | `AGENTS.md` (walk up), else `CLAUDE.md`; global `~/.config/opencode/AGENTS.md`, else `~/.claude/CLAUDE.md`; plus `instructions` [DOC v1][BIN] |
 | Prime Agent `prime-agent` 0.10.0 (Rust build; upstream v0.10.2/v0.10.3) | `~/.prime/agent/settings.json` (+ project `<cwd>/.prime/agent/settings.json`), key `mcpServers` [BIN][DOC] | yes, `"type":"stdio"` + `command/args/cwd/env` [DOC] | yes, `"type":"http"` (streamable HTTP) + `headers` map or `bearerTokenEnvVar` [BIN][DOC]; MCP is called from the Python REPL, not as native tools [DOC] | no user hook system; closest: `--autonomous-gate <cmd>` after each turn (autonomous only), background `bash()` completion notices, heartbeats, external `prime-agent send --steer/--follow-up` [BIN][DOC] | no general hook; gate output only on FAILURE in autonomous mode; `send` and `bash-done` notices DO enter context as user messages [DOC][BIN] | `PRIME_AGENT_INTERNAL_DAEMON_WORKER_ACTIVE_SESSION_ID` (= `list` id), `PRIME_AGENT_KERNEL_OWNER_PID` (worker pid); chain bash -> python kernel -> `prime-agent worker` -> daemon, no tty [BIN] | `AGENTS.md`/`AGENTS.MD`/`CLAUDE.md`/`CLAUDE.MD` (first hit per dir): agentDir global, then cwd ancestors root-first; plus `.prime/SYSTEM.md`, `APPEND_SYSTEM.md` [DOC][BIN] |
 
 ## Hook or fallback
@@ -84,9 +84,10 @@ plain English words they are of the same order [UNV]. To repeat:
    `--dangerously-bypass-hook-trust`; an installer cannot enable it silently, and changing the command needs
    approval again.
 5. **No shell hook: OpenCode and Prime Agent** (input to the fallback bead mairc-hd5).
-   - OpenCode 1.19.3: a small JS plugin can run `mairc hook` itself and append its output to the tool result
-     (`tool.execute.after`), to the system prompt (`experimental.chat.system.transform`), or start a turn on
-     `session.idle` [BIN source; UNV live].
+   - OpenCode (v2, 2.3.0): mairc's plugin runs `mairc hook` itself and appends its output to the tool result
+     (`ctx.tool.hook("execute.after")`) and, at session start, to the system prompt (`ctx.session.hook("context")`)
+     (mairc-ub6) [BIN live]. The v1 plugin hooks (`tool.execute.after`, `experimental.chat.system.transform`) are not
+     used.
    - Prime Agent 0.10.0: no hooks at all. Delivery is from outside: `prime-agent send --steer <session> <msg>`
      only when there is news, or a long-running command the agent starts that finishes on news; MCP tools are
      callable only from its Python REPL (`mcp.call_tool`) [DOC repo + BIN; UNV live].
@@ -96,7 +97,7 @@ plain English words they are of the same order [UNV]. To repeat:
 
 ## Claude Code (2.1.326)
 
-Docs were read on 2026-11-17: https://code.claude.com/docs/en/mcp, /hooks, /memory, /env-vars, /settings. The raw markdown copies are in /data/tmp/proudlion-compat/claude-sandbox/docs/.
+Docs were read on 2026-11-17: https://code.claude.com/docs/en/mcp, /hooks, /memory, /env-vars, /settings. The raw markdown copies are in <scratch>/claude-sandbox/docs/.
 
 ### (a) MCP servers
 - Scopes and files. **local** (the default) and **user** are stored in `~/.claude.json`. **project** is stored in `<project root>/.mcp.json`. The top-level key is `mcpServers` in both. [DOC mcp] The same file paths apply on every OS (home-relative). [UNV: the docs list no OS-specific paths]
@@ -195,7 +196,7 @@ cat ~/.claude/hooks/am_urgent_hint.py   # existing PostToolUse hook using additi
 curl -sSL -o docs/<p>.md https://code.claude.com/docs/en/<p>.md   # p = hooks mcp settings env-vars cli-reference
 WebFetch https://code.claude.com/docs/en/{hooks,mcp,memory}
 # one headless test (haiku, cost $0.0023), sandbox files: claude-sandbox/{hook.sh,settings.json,out/}
-cd /data/tmp/proudlion-compat/claude-sandbox && claude -p --model haiku --setting-sources project \
+cd <scratch>/claude-sandbox && claude -p --model haiku --setting-sources project \
   --settings ./settings.json --allowedTools "Bash(echo *)" --no-session-persistence --output-format json \
   "Run the bash command: echo hi. Then list every distinct token beginning with MAIRC_ ..."
 # -> result: MAIRC_SS_PLAIN / MAIRC_UPS_PLAIN / MAIRC_PTUJ_JSON  (MAIRC_PTUP_PLAIN absent)
@@ -206,9 +207,9 @@ cd /data/tmp/proudlion-compat/claude-sandbox && claude -p --model haiku --settin
 Docs read 2026-11-17. developers.openai.com/codex/* now 308-redirects to learn.chatgpt.com/docs/*; URLs below are the redirect targets.
 D-HOOKS = https://learn.chatgpt.com/docs/hooks · D-MCP = https://learn.chatgpt.com/docs/extend/mcp?surface=cli ·
 D-AGENTS = https://learn.chatgpt.com/docs/agent-configuration/agents-md · D-ADV = https://learn.chatgpt.com/docs/config-file/config-advanced
-Binary: `/home/ubuntu/.local/bin/codex` is a bash launcher `exec ~/.bun/bin/bun ~/.bun/bin/codex "$@"`; the real binary is
+Binary: `~/.local/bin/codex` is a bash launcher `exec ~/.bun/bin/bun ~/.bun/bin/codex "$@"`; the real binary is
 `~/.bun/install/global/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex` [BIN: `cat ~/.local/bin/codex`, `ps`].
-All binary tests used a sandbox `CODEX_HOME=/data/tmp/proudlion-compat/codex-sandbox/home` with NO auth.json and `openai_base_url` pointed at
+All binary tests used a sandbox `CODEX_HOME=<scratch>/codex-sandbox/home` with NO auth.json and `openai_base_url` pointed at
 a closed port (127.0.0.1:9) — zero model calls were made; requests failed with "Connection refused" [BIN].
 
 ### (a) MCP servers
@@ -257,13 +258,13 @@ a closed port (127.0.0.1:9) — zero model calls were made; requests failed with
 
 ### Commands used
 ```
-cat /data/tmp/proudlion-compat/BRIEF.md
+cat <scratch>/BRIEF.md
 codex --version; codex --help; codex mcp --help; codex mcp add --help; codex mcp list
 codex features list | grep -iE 'hook|mcp|plugin'; codex features --help; codex plugin --help; codex debug --help; codex debug prompt-input --help; codex exec --help
 cat ~/.codex/config.toml (secrets filtered); cat ~/.codex/hooks.json; cat ~/.local/bin/codex          # read only
 ps -eo pid,ppid,etime,args | grep codex
-# sandbox (no auth.json, no model calls): files under /data/tmp/proudlion-compat/codex-sandbox/{home,home2,proj,hook.sh,hook_silent.sh}
-export CODEX_HOME=/data/tmp/proudlion-compat/codex-sandbox/home
+# sandbox (no auth.json, no model calls): files under <scratch>/codex-sandbox/{home,home2,proj,hook.sh,hook_silent.sh}
+export CODEX_HOME=<scratch>/codex-sandbox/home
 codex mcp list; codex mcp get mairc_http
 CODEX_HOME=.../home2 codex mcp add mairc --env MAIRC_SEAT=s1 -- mairc stdio
 CODEX_HOME=.../home2 codex mcp add mairc-http --url http://127.0.0.1:4747/mcp --bearer-token-env-var MAIRC_TOKEN; cat .../home2/config.toml
@@ -351,10 +352,10 @@ Context checks on the brief's claims:
 
 ### Commands used
 ```sh
-cat /data/tmp/proudlion-compat/BRIEF.md
+cat <scratch>/BRIEF.md
 sed -n 1,700p ~/.local/bin/agy-locked                      # owner wrapper, read only
 file -L ~/.local/bin/agy-real; ~/.local/bin/agy-real --version   # -> 1.4.2
-export HOME=/data/tmp/proudlion-compat/agy-sandbox; cd $HOME
+export HOME=<scratch>/agy-sandbox; cd $HOME
 ~/.local/bin/agy-real --help; agy-real mcp --help; agy-real mcp add --help; agy-real mcp list --help
 ~/.local/bin/agy-real plugin --help; agy-real help hooks   # -> "unknown subcommand: hooks"
 ~/.local/bin/agy-real mcp add mairc mairc stdio
@@ -362,14 +363,14 @@ export HOME=/data/tmp/proudlion-compat/agy-sandbox; cd $HOME
 ~/.local/bin/agy-real mcp list; cat $HOME/.gemini/config/mcp_config.json
 # real config, read only (key names only for mcp):
 ls -la ~/.gemini ~/.gemini/config ~/.gemini/antigravity-cli; cat ~/.gemini/config/hooks.json
-python3 -c "import json;d=json.load(open('/home/ubuntu/.gemini/config/mcp_config.json'));print({k:sorted(v) for k,v in d['mcpServers'].items()})"
+python3 -c "import json;d=json.load(open('~/.gemini/config/mcp_config.json'));print({k:sorted(v) for k,v in d['mcpServers'].items()})"
 strings -n 6 ~/.local/bin/agy-real > agy-sandbox/strings.txt
 grep -E 'jetski/hooks_pb/hooks_go_proto\.\(\*[A-Za-z]+(Args|Result)\)\.Get' strings.txt   # hook proto fields
 grep -o -E 'ANTIGRAVITY_[A-Z_]+' strings.txt | sort -u; grep -n 'hooks.json\|mcp_config.json' strings.txt
 for p in hooks mcp rules plugins customization-discovery cli/gcli-migration cli/headless cli/using; do
   curl -sSL -A Mozilla/5.0 "https://antigravity.google/docs/$p.md"; done; curl -sSL https://antigravity.google/llms.txt
 # probe hook (agy-sandbox/hooks/probe.sh + agy-sandbox/.gemini/config/hooks.json, all six events), then:
-cd agy-sandbox/ws && HOME=/data/tmp/proudlion-compat/agy-sandbox timeout 60 ~/.local/bin/agy-real \
+cd agy-sandbox/ws && HOME=<scratch>/agy-sandbox timeout 60 ~/.local/bin/agy-real \
   -p "What is the secret word? Answer in one word." --print-timeout 45s   # -> OAuth required; no hook fired
 ```
 
@@ -449,7 +450,7 @@ Sources. Official web docs: https://docs.x.ai/build/features/hooks and https://d
 
 ### Commands used
 ```
-cat /data/tmp/proudlion-compat/BRIEF.md
+cat <scratch>/BRIEF.md
 ls -la ~/.grok ~/.grok/bin ~/.grok/docs ~/.grok/bundled ~/.grok/installed-plugins
 ~/.grok/bin/grok --version            # grok 1.0.70 (f50904eaee6c)
 ~/.grok/bin/grok --help
@@ -462,13 +463,13 @@ sed -n ... ~/.grok/docs/user-guide/{07-mcp-servers,10-hooks,12-project-rules,05-
 grep -n ... ~/.grok/docs/user-guide/*.md    # GROK_SESSION_ID, leader, daemon route, GROK_CONFIG, shell_environment_policy
 strings -n 6 $(readlink -f ~/.grok/bin/grok) | grep -oE '\bGROK_[A-Z0-9_]{3,}\b' | sort -u
 strings -n 5 $(readlink -f ~/.grok/bin/grok) | grep -oE '(AGENTS|Agents|AGENT|CLAUDE|Claude|GROK|Grok)(\.local)?\.md' | sort | uniq -c
-cd /data/tmp/proudlion-compat/grok-sandbox && grok inspect      # untrusted dir: Hooks (None)
+cd <scratch>/grok-sandbox && grok inspect      # untrusted dir: Hooks (None)
 cd /data/projects/fleksprime && grok inspect                    # trusted: Hooks (6) [claude], MCP from ~/.claude.json
 python3 -I -c '...hooks keys of ~/.claude/settings.json; type/url/header names of mcp-agent-mail in ~/.claude.json'
 awk '/^### 4.9/,/^### 4.10/' /data/projects/fleksprime/ops/interagent-communication-research-2026-11-10.md
 WebSearch "xAI Grok Build CLI docs hooks MCP config.toml"; WebFetch docs.x.ai/build/features/hooks, docs.x.ai/build/settings/reference
 ```
-No model call was made and no config, auth or HOME file was modified. The empty dir `/data/tmp/proudlion-compat/grok-sandbox` was created as the cwd for `inspect`.
+No model call was made and no config, auth or HOME file was modified. The empty dir `<scratch>/grok-sandbox` was created as the cwd for `inspect`.
 
 ## Devin CLI (3000.13.4)
 
@@ -529,17 +530,20 @@ python3 -I -c '<print key paths of ~/.config/devin/config.json>'          # read
 strings -n 4 <versions>/3000.13.4/bin/devin > scratch; grep -E 'CLAUDE_PROJECT_DIR|hookSpecificOutput|additionalContext|transcript_path' scratch
 ps -eo pid,ppid,tty,etime,args | grep '[d]evin'
 WebFetch https://docs.devin.ai/cli/extensibility/hooks/overview ; https://docs.devin.ai/cli/extensibility/mcp/configuration
-# Sandbox test (one tiny headless prompt, swe-2-flash-high). HOME=/data/tmp/proudlion-compat/devin-sandbox/home,
+# Sandbox test (one tiny headless prompt, swe-2-flash-high). HOME=<scratch>/devin-sandbox/home,
 # with a copy of credentials.toml (deleted afterwards). Hooks in devin-sandbox/proj/.devin/hooks.v1.json call devin-sandbox/hook.sh,
 # which logs stdin, env and the ps chain to devin-sandbox/log/ and prints a JSON or plain codeword.
-cd /data/tmp/proudlion-compat/devin-sandbox/proj && timeout 180 env HOME=…/home XDG_CONFIG_HOME=…/home/.config XDG_DATA_HOME=…/home/.local/share \
+cd <scratch>/devin-sandbox/proj && timeout 180 env HOME=…/home XDG_CONFIG_HOME=…/home/.config XDG_DATA_HOME=…/home/.local/share \
   devin --process-model in-process --respect-workspace-trust false --permission-mode dangerous -p "Run the shell command: true. Then list every codeword (format WORD-NN) …"
 # -> ALPHA-11 / BRAVO-22 / CHARLIE-44 seen; PLAIN-33 / DELTA-55 not seen
 ```
 
-## OpenCode (1.19.3)
+## OpenCode (1.19.3, superseded)
 
-Version caveat: the live site opencode.ai/docs (read 2026-11-17) now documents a NEWER plugin and config API (`mcp.servers.<name>`, `disabled`, a `plugins` array, `Plugin.define({id, setup})`). That API does NOT match the installed 1.19.3. Below, "DOC v1" means the docs shipped in the repo at tag v1.19.3: https://github.com/sst/opencode/tree/v1.19.3/packages/web/src/content/docs (plugins.mdx, mcp-servers.mdx, rules.mdx, config.mdx), read 2026-11-17. Copies are in /data/tmp/proudlion-compat/oc-docs/.
+Superseded: only OpenCode v2 is supported; see "OpenCode v2 (2.3.0): the chat plugin" at the end of this file and
+the table rows above. This section is kept as the record of the v1 research. "DOC v1" below means the docs shipped in
+the repo at tag v1.19.3: https://github.com/sst/opencode/tree/v1.19.3/packages/web/src/content/docs (plugins.mdx,
+mcp-servers.mdx, rules.mdx, config.mdx), read 2026-11-17.
 
 ### (a) MCP servers
 - Config files: global `~/.config/opencode/opencode.json` (also `.jsonc` and legacy `config.json`); `OPENCODE_CONFIG` (a file); project `opencode.json(c)` merged walking up from the cwd; `.opencode/` dirs; `OPENCODE_CONFIG_DIR`; `OPENCODE_CONFIG_CONTENT` (inline JSON, highest). System: `/etc/opencode/` on Linux; macOS uses MDM `ai.opencode.managed`. [DOC v1 config.mdx §Precedence order] [BIN: the strings include the loader for `config.json`, `opencode.json` and `opencode.jsonc` under Path.config, plus `OPENCODE_CONFIG`, `OPENCODE_CONFIG_DIR` and `OPENCODE_CONFIG_CONTENT`]
@@ -598,19 +602,19 @@ Version caveat: the live site opencode.ai/docs (read 2026-11-17) now documents a
 
 ### Commands used
 ```
-cat /data/tmp/proudlion-compat/BRIEF.md
-/home/ubuntu/.opencode/bin/opencode --version              # 1.19.3
+cat <scratch>/BRIEF.md
+~/.opencode/bin/opencode --version              # 1.19.3
 opencode --help; opencode mcp --help; opencode mcp add --help; opencode run --help; opencode debug --help
 cat /data/projects/fleksprime/opencode.json ~/.config/opencode/opencode.jsonc   # read only
 head -c 3000 ~/.config/opencode/plugins/dcg-guard.js
 cat ~/.config/opencode/node_modules/@opencode-ai/plugin/dist/index.d.ts
-strings -n 8 /home/ubuntu/.opencode/bin/opencode > .oc-strings.txt   # then python3 regex for OPENCODE_*,
+strings -n 8 ~/.opencode/bin/opencode > .oc-strings.txt   # then python3 regex for OPENCODE_*,
    #  "tool.execute.after", "experimental.chat.system.transform", noReply, McpLocalConfig, MCP.connectRemote, CLAUDE.md
 curl -sL https://raw.githubusercontent.com/sst/opencode/v1.19.3/packages/web/src/content/docs/{plugins,mcp-servers,rules,config}.mdx
 WebFetch opencode.ai/docs/{plugins,mcp-servers,rules,config,build/plugins}/   # 2026-11-17 (v2-era docs)
-# sandbox (no model call): HOME/XDG_* -> /data/tmp/proudlion-compat/opencode-sandbox/home, cwd .../opencode-sandbox/proj
+# sandbox (no model call): HOME/XDG_* -> <scratch>/opencode-sandbox/home, cwd .../opencode-sandbox/proj
 #   with opencode.json (local + remote mairc entries) and .opencode/plugins/probe.js (writes env/pid to probe.log)
-opencode debug paths; opencode debug config; opencode mcp list; cat /data/tmp/proudlion-compat/opencode-sandbox/probe.log
+opencode debug paths; opencode debug config; opencode mcp list; cat <scratch>/opencode-sandbox/probe.log
 ```
 
 ## Prime Agent (0.10.0)
@@ -683,7 +687,7 @@ Sources. No Prime Agent page exists on docs.primeintellect.ai (checked `https://
 
 ### Commands used
 ```
-cat /data/tmp/proudlion-compat/BRIEF.md
+cat <scratch>/BRIEF.md
 awk '/^### 4.4/,/^### 4.5/' /data/projects/fleksprime/ops/interagent-communication-research-2026-11-10.md
 cat ~/.local/bin/prime-agent                      # launcher: PRIME_AGENT_CODING_AGENT_DIR, daemon socket
 prime-agent --version ; prime-agent --help

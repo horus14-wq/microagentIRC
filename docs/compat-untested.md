@@ -12,8 +12,8 @@ Host check, 2026-11-17 (the one thing here that was run):
 
 | Command | Result |
 |---|---|
-| `command -v pi` | `/home/ubuntu/.local/bin/pi`, `pi --version` = **0.8.0** (built 2026-10-13). So Pi *is* installed on this host; `pi --help` was read for its MCP config precedence. Nothing else about Pi was exercised. |
-| `command -v goose` | `/home/ubuntu/go/bin/goose`, `goose --version` = **v3.30.1**, `goose DRIVER DBSTRING [OPTIONS] COMMAND` — the database-migration tool, **not** Block's goose agent. |
+| `command -v pi` | `~/.local/bin/pi`, `pi --version` = **0.8.0** (built 2026-10-13). So Pi *is* installed on this host; `pi --help` was read for its MCP config precedence. Nothing else about Pi was exercised. |
+| `command -v goose` | `~/go/bin/goose`, `goose --version` = **v3.30.1**, `goose DRIVER DBSTRING [OPTIONS] COMMAND` — the database-migration tool, **not** Block's goose agent. |
 | `command -v cursor-agent copilot amp` | nothing. |
 
 ## What mairc needs from a host CLI
