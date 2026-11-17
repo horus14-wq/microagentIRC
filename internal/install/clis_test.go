@@ -280,6 +280,29 @@ func TestBlockWriter(t *testing.T) {
 		t.Fatalf("uninstall from the middle = %q", out)
 	}
 
+	// A CLI that rewrites its own file can put its tables inside mairc's markers (Grok 1.0.88 wrote [marketplace]
+	// before the end marker on its first run). Those lines are not mairc's: a re-install keeps them, after the
+	// block, and an uninstall keeps them too. Before, both deleted them with the block.
+	theirs := "[marketplace]\nofficial = true\n\n[[marketplace.sources]]\ngit = \"https://example.com/m.git\"\n"
+	rewritten := "a = 1\n\n" + begin + "\n" + tomlMCPServer("/old/mairc") + "\n" + theirs + end + "\n[after]\nb = 2\n"
+	out, edited, problem = applyBlock([]byte(rewritten), spec, "/new/mairc", false)
+	if !edited || problem != "" || string(out) != "a = 1\n\n"+block("/new/mairc")+theirs+"[after]\nb = 2\n" {
+		t.Fatalf("re-install over a rewritten file = %q (%q)", out, problem)
+	}
+	if again, edited, _ := applyBlock(out, spec, "/new/mairc", false); edited || string(again) != string(out) {
+		t.Fatalf("the repaired file is not stable: %q", again)
+	}
+	out, edited, _ = applyBlock([]byte(rewritten), spec, "", true)
+	if !edited || string(out) != "a = 1\n"+theirs+"[after]\nb = 2\n" {
+		t.Fatalf("uninstall from a rewritten file = %q", out)
+	}
+	// Their table first, mairc's after it, both inside the markers.
+	reordered := begin + "\n" + theirs + tomlMCPServer("/old/mairc") + end + "\n"
+	out, _, _ = applyBlock([]byte(reordered), spec, "", true)
+	if string(out) != theirs {
+		t.Fatalf("uninstall with their table first = %q", out)
+	}
+
 	// Refusals: a hand-written table of ours, and a begin marker without an end.
 	for name, raw := range map[string]string{
 		"hand-written table": "[mcp_servers.mairc]\ncommand = \"x\"\n",

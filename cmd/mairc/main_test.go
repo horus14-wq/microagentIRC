@@ -419,4 +419,39 @@ func TestCopyFile(t *testing.T) {
 	if info.Mode().Perm() != want {
 		t.Fatalf("mode %v, want %v", info.Mode().Perm(), want)
 	}
+
+	// A second install of the same binary copies nothing: the file is not rewritten (same file identity).
+	if err := copyFile(src, dst, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	again, err := os.Stat(dst)
+	if err != nil || !os.SameFile(info, again) {
+		t.Fatalf("an identical binary was copied again (%v)", err)
+	}
+	// A different binary replaces the name and leaves the old file alone, so a process still running the old one
+	// is not written into ("text file busy" before this). A handle opened before the copy still reads the old bytes.
+	old, err := os.Open(dst) // #nosec G304 -- test file in t.TempDir
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = old.Close() }()
+	if err := os.WriteFile(src, []byte("newer-binary"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := copyFile(src, dst, 0o755); err != nil {
+		if runtime.GOOS == "windows" {
+			t.Skipf("Windows does not rename over an open file: %v", err)
+		}
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(dst); string(b) != "newer-binary" { // #nosec G304 -- test file in t.TempDir
+		t.Fatalf("after the update the path holds %q", b)
+	}
+	stillOld := make([]byte, len("binary-bytes"))
+	if _, err := old.ReadAt(stillOld, 0); err != nil || string(stillOld) != "binary-bytes" {
+		t.Fatalf("the file a running process had open was changed: %q (%v)", stillOld, err)
+	}
+	if _, err := os.Stat(dst + ".new"); err == nil {
+		t.Fatal("the temporary copy was left behind")
+	}
 }

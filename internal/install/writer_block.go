@@ -50,6 +50,13 @@ func applyBlock(raw []byte, b *blockSpec, binary string, uninstall bool) (out []
 		}
 	}
 	block := b.begin + "\n" + b.body(binary) + b.end + "\n"
+	// What sits between the markers and is not mairc's: a CLI that rewrites its own TOML file can put its tables
+	// before the end marker (Grok 1.0.88 did, with [marketplace]). Those lines are the user's; they are kept, after
+	// the block, and never replaced or removed with it.
+	foreign := ""
+	if start >= 0 {
+		foreign = foreignLines(lines[start+1:stop], b)
+	}
 	if uninstall {
 		if start < 0 {
 			return raw, false, ""
@@ -58,14 +65,14 @@ func applyBlock(raw []byte, b *blockSpec, binary string, uninstall bool) (out []
 		if from > 0 && strings.TrimRight(lines[from-1], "\r\n") == "" {
 			from-- // the blank line install put before the block
 		}
-		return []byte(strings.Join(lines[:from], "") + strings.Join(lines[stop+1:], "")), true, ""
+		return []byte(strings.Join(lines[:from], "") + foreign + strings.Join(lines[stop+1:], "")), true, ""
 	}
 	if start >= 0 {
 		current := strings.Join(lines[start:stop+1], "")
 		if current == block {
 			return raw, false, ""
 		}
-		return []byte(strings.Join(lines[:start], "") + block + strings.Join(lines[stop+1:], "")), true, ""
+		return []byte(strings.Join(lines[:start], "") + block + foreign + strings.Join(lines[stop+1:], "")), true, ""
 	}
 	text := string(raw)
 	if text != "" {
@@ -75,6 +82,36 @@ func applyBlock(raw []byte, b *blockSpec, binary string, uninstall bool) (out []
 		text += "\n"
 	}
 	return []byte(text + block), true, ""
+}
+
+// foreignLines returns the lines between mairc's markers that belong to somebody else, joined. Only a block that
+// names its own table headers (a TOML block: b.conflicts) can hold such lines: every table header that is not one of
+// mairc's starts a foreign table, which runs until the next header of mairc's own. A block without headers (an
+// instruction file) is mairc's from marker to marker.
+func foreignLines(inner []string, b *blockSpec) string {
+	if len(b.conflicts) == 0 {
+		return ""
+	}
+	var out strings.Builder
+	theirs := false
+	for _, line := range inner {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "[") {
+			theirs = true
+			for _, own := range b.conflicts {
+				if trimmed == own {
+					theirs = false
+				}
+			}
+		}
+		if theirs {
+			out.WriteString(line)
+			if !strings.HasSuffix(line, "\n") {
+				out.WriteString("\n")
+			}
+		}
+	}
+	return out.String()
 }
 
 // markerPrefix is the part of a begin marker that identifies it, before any note in parentheses.

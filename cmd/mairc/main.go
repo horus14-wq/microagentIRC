@@ -350,6 +350,7 @@ func runInstall(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		switch {
 		case *dryRun:
 			_, _ = fmt.Fprintf(stdout, "%s sits in a temporary or Downloads directory; it would be copied to %s first\n", binary, stable)
+			return stable, nil // the preview shows the path the real install records
 		case *yes || askYesNo(stdin, stdout, fmt.Sprintf("%s sits in a temporary or Downloads directory; the recorded path disappears with the next cleanup.\nCopy mairc to %s first? [y/N] ", binary, stable)):
 			if err := copyFile(binary, stable, 0o755); err != nil {
 				return "", err
@@ -415,7 +416,21 @@ func copyFile(src, dst string, mode os.FileMode) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(dst, b, mode) // #nosec G703 -- dst is stableBinaryPath under the user's home, not input
+	// The same binary is already there (a second install): nothing to copy.
+	if old, err := os.ReadFile(dst); err == nil && bytes.Equal(old, b) { // #nosec G304 -- stableBinaryPath
+		return nil
+	}
+	// Write beside the target and rename over it. Writing into the target itself fails with "text file busy" while
+	// an agent's shim or the daemon runs from it; a rename replaces the name and leaves the running copy alone.
+	tmp := dst + ".new"
+	if err := os.WriteFile(tmp, b, mode); err != nil { // #nosec G703 -- beside stableBinaryPath, not input
+		return err
+	}
+	if err := os.Rename(tmp, dst); err != nil {
+		_ = os.Remove(tmp)
+		return fmt.Errorf("%w (is mairc running from %s? stop the agents that use it and install again)", err, dst)
+	}
+	return nil
 }
 
 // daemonStatus is the body of GET /v1/status.
