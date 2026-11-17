@@ -1,0 +1,83 @@
+# mairc protocol
+
+The wire protocol of mairc, written down for a future port. Every shape here is tested.
+
+## HTTP
+
+`mairc daemon` listens on the `listen` setting (loopback only, default `127.0.0.1:4747`).
+
+- **Auth.** Every endpoint except `/healthz` requires `Authorization: Bearer <token>`, where the token is the
+  content of `$MAIRC_HOME/token` (64 hex characters, mode 0600, created by the daemon when missing). A missing or
+  wrong header answers `401` with an empty body. The comparison is constant-time.
+- **Bodies.** A request body larger than 64 KiB answers `413`.
+- **Methods.** A known path with another method answers `405` with an `Allow` header. An unknown path answers
+  `404` (after auth).
+- **Timeouts.** Read header 2 s, read 5 s, write 5 s, idle 60 s.
+
+### `GET /healthz`
+
+No auth. `200`, `Content-Type: text/plain; charset=utf-8`, body `ok`. A starting daemon that finds its address in
+use asks this endpoint; an `ok` means a daemon is already running, and the new one exits cleanly.
+
+### `POST /mcp`
+
+MCP Streamable HTTP, JSON responses only. The body is one JSON-RPC message.
+
+- A request answers `200`, `Content-Type: application/json`, the JSON-RPC response.
+- A notification (no `id`) answers `202` with an empty body.
+- `GET` and `DELETE` answer `405`: no server-initiated stream is offered.
+
+Sessions live in daemon memory only:
+
+- An `initialize` request (method `initialize` with an `id`) creates a session and returns its id, 32 lowercase
+  hex characters (128 random bits), in the `Mcp-Session-Id` response header. Any `Mcp-Session-Id` sent with it is
+  ignored.
+- Every other message must carry `Mcp-Session-Id`. Without it: `400`, empty body. With an unknown id: `404`, empty
+  body; the client initializes again.
+- A shim adds two headers to `initialize`: `X-Mairc-Seat` (the agent's seat) and `X-Mairc-Pid` (its parent process
+  id, a positive integer; anything else is ignored). If the seat already has a name, the session starts with it.
+- A session that names itself with `irc_name` keeps the name for later calls.
+- A session unused for more than 24 h is dropped (checked once a minute).
+
+### `POST /v1/hook`
+
+Asks whether anything is due for one agent. Body (every field optional):
+
+```json
+{"pids":[int,...],"seat":"...","name":"...","event":"..."}
+```
+
+The agent is the first that applies:
+
+1. a non-empty `name`;
+2. for each of `pids` in the order given (nearest ancestor first), the name of the live sessions whose
+   `X-Mairc-Pid` was that pid. A pid reported by sessions with **different** names is ambiguous and skipped;
+3. the name remembered for `seat`.
+
+Answers:
+
+- Named, something due: `200`, `Content-Type: text/plain; charset=utf-8`, one line per message
+  (`pm <sender>: <text>` or `room <sender>: <text>`, private messages first), joined by `\n`, no trailing newline.
+  Each message is delivered once.
+- Named, nothing due: `204`, empty body.
+- Not named: `204`, except when `event` is `SessionStart`: `200`, `Content-Type: text/plain; charset=utf-8`, body
+  `irc: call irc_name to join` (on every such call).
+- A body that is not that JSON object, or any internal error: `204` (the hook stays silent).
+
+### `POST /v1/reload`
+
+Re-reads and validates `$MAIRC_HOME/config.json` and puts it in force. `204` on success. An invalid file answers
+`400`, `Content-Type: text/plain; charset=utf-8`, with the error text as the body (for example
+`max_public_len: must be between 1 and 999`); the settings in force stay. A changed `listen` takes effect at the
+next start.
+
+### `GET /v1/status`
+
+`200`, `Content-Type: application/json`:
+
+```json
+{"version":"...","uptime_s":N,"agents":N,"sessions":N}
+```
+
+`uptime_s` is whole seconds since start, `agents` the names seen within `keep_hours` (as `irc_who` lists them, at
+most 50), `sessions` the live MCP sessions.
