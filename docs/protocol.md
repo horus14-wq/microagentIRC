@@ -36,6 +36,10 @@ Sessions live in daemon memory only:
   body; the client initializes again.
 - A shim adds two headers to `initialize`: `X-Mairc-Seat` (the agent's seat) and `X-Mairc-Pid` (its parent process
   id, a positive integer; anything else is ignored). If the seat already has a name, the session starts with it.
+- A shim whose environment holds the agent CLI's session id (`CLAUDE_CODE_SESSION_ID`, `GEMINI_SESSION_ID`,
+  `GROK_SESSION_ID`, the first that is valid) also sends it as `X-Mairc-Session`. When the session has a name, that
+  CLI session is bound to it (see "Who the hook runs for"), but only while it is bound to no name: a CLI started
+  from inside another CLI inherits the outer one's variable and must not take over its hook.
 - A session that names itself with `irc_name` keeps the name for later calls.
 - A session unused for more than 24 h is dropped (checked once a minute).
 
@@ -44,15 +48,50 @@ Sessions live in daemon memory only:
 Asks whether anything is due for one agent. Body (every field optional):
 
 ```json
-{"pids":[int,...],"seat":"...","name":"...","event":"..."}
+{"pids":[int,...],"seat":"...","name":"...","event":"...","session":"...","claimed":"..."}
 ```
+
+`session` is the agent CLI's own session id: 1 to 200 printable ASCII characters without spaces; anything else is
+ignored. `claimed` is a name the hook read from the result of an `irc_name` call (below). The hook leaves both out
+when it has none.
+
+#### Who the hook runs for
 
 The agent is the first that applies:
 
 1. a non-empty `name`;
-2. for each of `pids` in the order given (nearest ancestor first), the name of the live sessions whose
-   `X-Mairc-Pid` was that pid. A pid reported by sessions with **different** names is ambiguous and skipped;
-3. the name remembered for `seat`.
+2. `claimed`, when the request has a `session` and `irc_name` set or confirmed exactly that name in the last 60
+   seconds. The session is bound to the name, and any other CLI session bound to that name is released;
+3. the name `session` is bound to;
+4. for each of `pids` in the order given (nearest ancestor first), the name of the live sessions whose
+   `X-Mairc-Pid` was that pid **on the same machine** (the machine is the host part of the seat; a request and a
+   shim that both name no machine also match). A pid reported by sessions with **different** names is ambiguous
+   and skipped;
+5. the name remembered for `seat`. A seat with a machine that has no name also tries the same seat without the
+   machine (the form before version 0.1.0 named machines), and moves a name found there to the new form.
+
+**Learning.** A request that carries a `session` and is resolved by rule 4 or 5 binds that session to the name.
+From then on rule 3 resolves it, whatever its process chain and seat become. A bound session is never re-bound by
+rule 4 or 5; only a fresh `claimed` name (rule 2) or the agent renaming itself with `irc_name` moves it.
+
+**Bindings survive a restart.** They are in the daemon's database (table `hook_session`) and are loaded into
+memory when the daemon starts, so rule 3 runs no SQL. A binding unused for 7 days is deleted; its last-used time
+is written at most once an hour.
+
+**The seat** is `@<machine>/<place>`: `<machine>` is the host name, lowercased, at most 63 characters, every
+character outside `a-z 0-9 . -` replaced by `-`, or `unknown`; `<place>` is the first of `env:` `$MAIRC_SEAT`,
+`tmux:` `$TMUX_PANE`, `tty:` the controlling terminal, `cwd:` the working directory. Two machines that share one
+daemon therefore never share a seat or a process id.
+
+**What the hook reads** from the JSON the agent CLI passes on stdin (`internal/hook`):
+
+| Fact | Fields, in order | Then |
+|---|---|---|
+| event | `hook_event_name` | the `--event` flag wins |
+| `session` | `session_id`, `sessionId`, `conversationId` | else the environment variables listed for the shim |
+| `claimed` | `tool_name` ending in `irc_name` and a `tool_response` holding a text that is exactly `you are <name>` | none |
+
+A CLI that gives its hooks none of these still works by rules 4 and 5, as before.
 
 What the client side can resolve depends on the platform (`internal/identity`):
 
@@ -61,8 +100,8 @@ What the client side can resolve depends on the platform (`internal/identity`):
 | `pids` | parent chain from `/proc/<pid>/stat` | parent chain from a process snapshot; the walk stops at a parent that has exited, at a parent id reused by a process that started later (Windows keeps an orphan's recorded parent id), and at the idle and System processes |
 | `seat` | `env:` `$MAIRC_SEAT`, then `tmux:` `$TMUX_PANE`, then `tty:` the controlling terminal (`/dev/pts/N`), then `cwd:` | the same order; the terminal is the console the process is attached to, `tty:con:<hex window handle>` (one per console window or terminal tab); a process with no console falls back to `cwd:` |
 
-Where nothing resolves, `pids` is empty and the agent is found by `name` or `seat` alone, as on a system without
-`/proc`.
+Where nothing resolves, `pids` is empty and the agent is found by `name`, `session` or `seat` alone, as on a system
+without `/proc`. The table shows the place part of the seat; the machine is in front of it on every platform.
 
 Answers:
 

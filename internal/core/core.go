@@ -146,6 +146,22 @@ type Store interface {
 	Close() error
 }
 
+// Bindings is what the daemon remembers across restarts about who a hook runs for (implemented by
+// internal/store): which name each agent CLI session resolved to, and the move of a remembered name from an
+// old-form seat to its host-qualified form. It is separate from Store so that packages which fake Store are not
+// touched. Every method is safe for concurrent use.
+type Bindings interface {
+	// BindHookSession records that the hook session belongs to the name, replacing any earlier name, and sets its
+	// last-used time.
+	BindHookSession(ctx context.Context, session, name string, now time.Time) error
+	// HookSessions returns every stored binding, session to name.
+	HookSessions(ctx context.Context) (map[string]string, error)
+	// PruneHookSessions deletes bindings last used before the given time and returns how many it deleted.
+	PruneHookSessions(ctx context.Context, before time.Time) (int, error)
+	// MoveSeat rebinds the name from one seat to another. It changes nothing unless the name is bound to from.
+	MoveSeat(ctx context.Context, name, from, to string) error
+}
+
 // Chat is the rule layer (implemented by internal/chat) that tools, the hook endpoint and the daemon call.
 // Methods taking a name return ErrNoName when it is empty.
 type Chat interface {

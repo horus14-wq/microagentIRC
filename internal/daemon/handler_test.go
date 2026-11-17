@@ -18,6 +18,7 @@ import (
 	"github.com/horus14-wq/microagentIRC/internal/chat"
 	"github.com/horus14-wq/microagentIRC/internal/config"
 	"github.com/horus14-wq/microagentIRC/internal/core"
+	"github.com/horus14-wq/microagentIRC/internal/identity"
 	"github.com/horus14-wq/microagentIRC/internal/mcp"
 	"github.com/horus14-wq/microagentIRC/internal/store"
 	"github.com/horus14-wq/microagentIRC/internal/tools"
@@ -416,7 +417,7 @@ func TestSeatRemembersName(t *testing.T) {
 				t.Fatalf("Session.Name %q, want %q", got, tc.wantName)
 			}
 			// The pid index learned the name at initialize, without a tool call.
-			if name := f.srv.nameForPids([]int{tc.pid}); name != tc.wantName {
+			if name := f.srv.nameForPids(identity.HostOf(tc.seat), []int{tc.pid}); name != tc.wantName {
 				t.Fatalf("pid resolves to %q, want %q", name, tc.wantName)
 			}
 		})
@@ -512,10 +513,11 @@ func TestProtocolDoc(t *testing.T) {
 		t.Fatalf("endpoint headings %q, want %q", endpoints, want)
 	}
 	for _, s := range []string{
-		"Authorization: Bearer", headerSession, headerSeat, headerPid,
+		"Authorization: Bearer", headerSession, headerSeat, headerPid, headerHookSession, "hook_session",
 		"`200`", "`202`", "`204`", "`400`", "`401`", "`404`", "`405`", "`413`",
 		"`" + joinLine + "`", `{"version":"...","uptime_s":N,"agents":N,"sessions":N}`,
-		`{"pids":[int,...],"seat":"...","name":"...","event":"..."}`,
+		// The hook body gained `session` and `claimed` (bead mairc-seat-0fk).
+		`{"pids":[int,...],"seat":"...","name":"...","event":"...","session":"...","claimed":"..."}`,
 	} {
 		if !strings.Contains(doc, s) {
 			t.Errorf("docs/protocol.md does not mention %q", s)

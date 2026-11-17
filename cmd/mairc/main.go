@@ -133,11 +133,12 @@ func runHook(args []string, getenv func(string) string, stdin io.Reader, stdout 
 		Client:  *client,
 		Event:   *event,
 		Name:    *name,
-		Seat:    identity.Seat(getenv, identity.ControllingTTY, os.Getwd),
+		Seat:    identity.HostSeat(identity.Seat(getenv, identity.ControllingTTY, os.Getwd), os.Hostname),
 		PIDs:    identity.Ancestors(os.Getpid(), 8, identity.ParentOf),
 		Stdin:   in,
 		Stdout:  stdout,
 		Host:    hook.HostFrom(getenv),
+		Session: identity.SessionFromEnv(getenv),
 	})
 }
 
@@ -184,8 +185,9 @@ func runStdio(getenv func(string) string, stdin io.Reader, stdout io.Writer) int
 	_ = shim.Run(ctx, shim.Options{
 		BaseURL:     "http://" + settings.Listen,
 		Token:       token,
-		Seat:        identity.Seat(getenv, identity.ControllingTTY, os.Getwd),
+		Seat:        identity.HostSeat(identity.Seat(getenv, identity.ControllingTTY, os.Getwd), os.Hostname),
 		AgentPID:    os.Getppid(),
+		Session:     identity.SessionFromEnv(getenv),
 		In:          stdin,
 		Out:         stdout,
 		StartDaemon: start,

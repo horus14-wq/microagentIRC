@@ -15,7 +15,80 @@ import (
 )
 
 // The store must satisfy the contract.
-var _ core.Store = (*Store)(nil)
+var (
+	_ core.Store    = (*Store)(nil)
+	_ core.Bindings = (*Store)(nil)
+)
+
+func TestHookSessionBindings(t *testing.T) {
+	ctx := context.Background()
+	t0 := start()
+	path := filepath.Join(t.TempDir(), "bindings.db")
+	s, err := Open(ctx, path)
+	must(t, err)
+	if got, err := s.HookSessions(ctx); err != nil || len(got) != 0 {
+		t.Fatalf("a new store has no bindings: %v %v", got, err)
+	}
+	must(t, s.BindHookSession(ctx, "sess-a", "fox", t0))
+	must(t, s.BindHookSession(ctx, "sess-b", "dog", t0.Add(time.Hour)))
+	// Binding a session again replaces its name and its last-used time.
+	must(t, s.BindHookSession(ctx, "sess-a", "owl", t0.Add(2*time.Hour)))
+	must(t, s.Close())
+
+	// The bindings are in the database: a reopened store has them.
+	s, err = Open(ctx, path)
+	must(t, err)
+	defer func() { _ = s.Close() }()
+	got, err := s.HookSessions(ctx)
+	must(t, err)
+	if len(got) != 2 || got["sess-a"] != "owl" || got["sess-b"] != "dog" {
+		t.Fatalf("bindings after reopening: %v", got)
+	}
+	// sess-b was last used at +1h, sess-a at +2h.
+	deleted, err := s.PruneHookSessions(ctx, t0.Add(90*time.Minute))
+	must(t, err)
+	got, err = s.HookSessions(ctx)
+	must(t, err)
+	if deleted != 1 || len(got) != 1 || got["sess-a"] != "owl" {
+		t.Fatalf("after pruning before +90m: deleted %d, left %v", deleted, got)
+	}
+}
+
+func TestMoveSeat(t *testing.T) {
+	ctx := context.Background()
+	t0 := start()
+	seatOf := func(t *testing.T, s *Store, name string) string {
+		t.Helper()
+		a, ok, err := s.Agent(ctx, name)
+		must(t, err)
+		if !ok {
+			t.Fatalf("agent %s is missing", name)
+		}
+		return a.Seat
+	}
+	tests := []struct {
+		name             string
+		move             [3]string // name, from, to
+		wantFox, wantDog string
+	}{
+		{"the name moves from its old seat", [3]string{"fox", "tmux:%1", "@pc/tmux:%1"}, "@pc/tmux:%1", "tmux:%2"},
+		{"not bound to from: nothing changes", [3]string{"fox", "tmux:%9", "@pc/tmux:%1"}, "tmux:%1", "tmux:%2"},
+		{"an unknown name: nothing changes", [3]string{"cat", "tmux:%1", "@pc/tmux:%1"}, "tmux:%1", "tmux:%2"},
+		{"the new seat's other name is released", [3]string{"fox", "tmux:%1", "tmux:%2"}, "tmux:%2", ""},
+		{"an empty seat: nothing changes", [3]string{"fox", "tmux:%1", ""}, "tmux:%1", "tmux:%2"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			s := memory(ctx, t)
+			must(t, s.UpsertAgent(ctx, "fox", "tmux:%1", t0))
+			must(t, s.UpsertAgent(ctx, "dog", "tmux:%2", t0))
+			must(t, s.MoveSeat(ctx, tc.move[0], tc.move[1], tc.move[2]))
+			if fox, dog := seatOf(t, s, "fox"), seatOf(t, s, "dog"); fox != tc.wantFox || dog != tc.wantDog {
+				t.Fatalf("seats: fox %q dog %q, want %q and %q", fox, dog, tc.wantFox, tc.wantDog)
+			}
+		})
+	}
+}
 
 // start is the fixed instant every test counts from.
 func start() time.Time { return time.UnixMilli(1_800_000_000_000) }
@@ -478,13 +551,14 @@ func TestParseQueries(t *testing.T) {
 		"AgentSeat", "ReleaseSeat", "InsertAgent", "UpdateAgent", "AgentByName", "AgentBySeat", "Agents", "Touch",
 		"InsertMessage", "SetLastPublic", "SetLastPrivate", "InsertDelivery", "UnreadPMs", "MarkDelivered",
 		"HasUnreadPM", "RoomTail", "RoomSince", "SetRoomCursor", "MaxRoomID", "PruneByAge", "PruneByCount",
+		"BindHookSession", "HookSessions", "PruneHookSessions", "MoveSeat",
 	} {
 		if embedded[name] == "" {
 			t.Errorf("statement %s is missing from queries.sql", name)
 		}
 	}
-	if len(embedded) != 21 {
-		t.Errorf("queries.sql has %d statements, the code uses 21", len(embedded))
+	if len(embedded) != 25 {
+		t.Errorf("queries.sql has %d statements, the code uses 25", len(embedded))
 	}
 }
 

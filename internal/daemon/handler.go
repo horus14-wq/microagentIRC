@@ -15,7 +15,9 @@ import (
 	"time"
 
 	"github.com/horus14-wq/microagentIRC/internal/core"
+	"github.com/horus14-wq/microagentIRC/internal/identity"
 	"github.com/horus14-wq/microagentIRC/internal/mcp"
+	"github.com/horus14-wq/microagentIRC/internal/names"
 )
 
 // maxBody is the largest request body any endpoint reads.
@@ -35,13 +37,39 @@ const (
 	headerSession = "Mcp-Session-Id"
 	headerSeat    = "X-Mairc-Seat"
 	headerPid     = "X-Mairc-Pid"
+	// headerHookSession is the agent CLI's own session id, when the shim's environment has one.
+	headerHookSession = "X-Mairc-Session"
+)
+
+const (
+	// claimWindow is how long after an irc_name call a hook may claim the name that call gave.
+	claimWindow = 60 * time.Second
+	// bindingIdle is how long an unused hook-session binding is kept.
+	bindingIdle = 7 * 24 * time.Hour
+	// bindingSave is how often a binding in use has its last-used time written to the database.
+	bindingSave = time.Hour
 )
 
 // session is one MCP session: what the tools see, the process id a shim reported, and when it was last used.
 type session struct {
 	core.Session
-	pid      int
+	pid         int
+	hookSession string // the agent CLI's session id the shim reported, or ""
+	lastUsed    time.Time
+}
+
+// pidKey is a shim's process id on one machine. The machine comes from the session's seat ("" for a client that
+// sends no host), so a process id on one machine never matches a shim on another.
+type pidKey struct {
+	host string
+	pid  int
+}
+
+// binding is what the daemon knows about one agent CLI session's hook: the name it runs for.
+type binding struct {
+	name     string
 	lastUsed time.Time
+	saved    time.Time // when it was last written to the database
 }
 
 // server is the HTTP handler. Its mutable state (sessions and the pid index) sits behind one mutex.
@@ -59,7 +87,13 @@ type server struct {
 	sessions map[string]*session
 	// pids maps a shim's process id to the names of the live sessions that reported it, each with how many
 	// sessions carry it. One name means the pid resolves; more than one means it is ambiguous.
-	pids map[int]map[string]int
+	pids map[pidKey]map[string]int
+	// bound maps an agent CLI session id to the name its hook runs for. It is learned (from a process id, a seat
+	// or the result of irc_name), kept in memory for the hot path and stored through bindings.
+	bound map[string]*binding
+	// named is when irc_name last set or confirmed each name, for the claim window.
+	named    map[string]time.Time
+	bindings core.Bindings // nil: bindings live in memory only
 }
 
 // Handler returns the HTTP handler alone, for tests (httptest) and for the end-to-end test.
@@ -86,8 +120,27 @@ func newServer(chat core.Chat, mcpServer *mcp.Server, token, version string, rel
 		logf:     logf,
 		start:    clock.Now(),
 		sessions: make(map[string]*session),
-		pids:     make(map[int]map[string]int),
+		pids:     make(map[pidKey]map[string]int),
+		bound:    make(map[string]*binding),
+		named:    make(map[string]time.Time),
 	}
+}
+
+// useBindings gives the server its durable bindings and loads the stored ones, so a restarted daemon still knows
+// which name each agent CLI session's hook runs for.
+func (s *server) useBindings(ctx context.Context, b core.Bindings) error {
+	stored, err := b.HookSessions(ctx)
+	if err != nil {
+		return err
+	}
+	now := s.clock.Now()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.bindings = b
+	for sessionID, name := range stored {
+		s.bound[sessionID] = &binding{name: name, lastUsed: now, saved: now}
+	}
+	return nil
 }
 
 // ServeHTTP routes a request. Every path but /healthz needs the bearer token.
@@ -189,7 +242,10 @@ func (s *server) serveMCP(w http.ResponseWriter, r *http.Request) {
 	before := sess.Name
 	out := s.mcp.Handle(r.Context(), &sess, body)
 	if sess.Name != before {
-		s.rename(id, sess.Name)
+		s.rename(r.Context(), id, sess.Name)
+	}
+	if isNameCall(body) {
+		s.noteNamed(sess.Name)
 	}
 	if out == nil {
 		w.WriteHeader(http.StatusAccepted)
@@ -211,6 +267,17 @@ func isInitialize(body []byte) bool {
 	return len(msg.ID) > 0 && string(msg.ID) != "null"
 }
 
+// isNameCall reports whether the body is a tools/call of irc_name.
+func isNameCall(body []byte) bool {
+	var msg struct {
+		Method string `json:"method"`
+		Params struct {
+			Name string `json:"name"`
+		} `json:"params"`
+	}
+	return json.Unmarshal(body, &msg) == nil && msg.Method == "tools/call" && msg.Params.Name == "irc_name"
+}
+
 // newSession creates a session from the shim's headers and returns its id and a copy of what the tools see.
 func (s *server) newSession(r *http.Request) (string, core.Session, error) {
 	var raw [16]byte
@@ -218,12 +285,16 @@ func (s *server) newSession(r *http.Request) (string, core.Session, error) {
 		return "", core.Session{}, err
 	}
 	id := hex.EncodeToString(raw[:])
-	sess := &session{Session: core.Session{Seat: r.Header.Get(headerSeat)}, lastUsed: s.clock.Now()}
+	now := s.clock.Now()
+	sess := &session{Session: core.Session{Seat: r.Header.Get(headerSeat)}, lastUsed: now}
 	if pid, err := strconv.Atoi(r.Header.Get(headerPid)); err == nil && pid > 0 {
 		sess.pid = pid
 	}
+	if hookSession := r.Header.Get(headerHookSession); identity.ValidSession(hookSession) {
+		sess.hookSession = hookSession
+	}
 	if sess.Seat != "" {
-		name, err := s.chat.NameForSeat(r.Context(), sess.Seat)
+		name, err := s.nameForSeat(r.Context(), sess.Seat)
 		if err != nil {
 			return "", core.Session{}, err
 		}
@@ -231,61 +302,207 @@ func (s *server) newSession(r *http.Request) (string, core.Session, error) {
 	}
 	s.mu.Lock()
 	s.sessions[id] = sess
-	s.index(sess.pid, sess.Name, 1)
+	s.index(sess, 1)
 	s.mu.Unlock()
+	if sess.Name != "" && sess.hookSession != "" {
+		// Only while the session is bound to nobody (see rename).
+		s.mu.Lock()
+		free := s.bound[sess.hookSession] == nil
+		s.mu.Unlock()
+		if free {
+			s.bind(r.Context(), sess.hookSession, sess.Name, now)
+		}
+	}
 	return id, sess.Session, nil
 }
 
-// rename records a session's new name (a tool changed it) and keeps the pid index in step.
-func (s *server) rename(id, name string) {
+// nameForSeat returns the name remembered for the seat. A host-qualified seat with no name also tries the form the
+// same place had before hosts were added, and moves a name found there to the new form, so a name remembered by an
+// older version is not lost.
+func (s *server) nameForSeat(ctx context.Context, seat string) (string, error) {
+	name, err := s.chat.NameForSeat(ctx, seat)
+	if err != nil || name != "" {
+		return name, err
+	}
+	legacy := identity.Legacy(seat)
+	if legacy == seat {
+		return "", nil
+	}
+	if name, err = s.chat.NameForSeat(ctx, legacy); err != nil || name == "" {
+		return "", err
+	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	bindings := s.bindings
+	s.mu.Unlock()
+	if bindings != nil {
+		if err := bindings.MoveSeat(ctx, name, legacy, seat); err != nil {
+			s.logf("error: move seat: %v", err)
+		}
+	}
+	return name, nil
+}
+
+// rename records a session's new name (a tool changed it) and keeps the pid index and the hook-session bindings in
+// step: the agent CLI session that ran for the old name now runs for the new one.
+func (s *server) rename(ctx context.Context, id, name string) {
+	now := s.clock.Now()
+	s.mu.Lock()
 	sess := s.sessions[id]
 	if sess == nil || sess.Name == name {
+		s.mu.Unlock()
 		return
 	}
-	s.index(sess.pid, sess.Name, -1)
+	old := sess.Name
+	s.index(sess, -1)
 	sess.Name = name
-	s.index(sess.pid, sess.Name, 1)
+	s.index(sess, 1)
+	// The shim's own report of its agent CLI session is used only while that session is bound to nobody: a CLI
+	// started from inside another CLI inherits the outer one's session id in its environment, and must not take
+	// the outer agent's hook with it.
+	moved := make([]string, 0, 1)
+	if sess.hookSession != "" && s.bound[sess.hookSession] == nil {
+		moved = append(moved, sess.hookSession)
+	}
+	// The agent CLI sessions that ran for the old name follow the rename, unless another live session still has
+	// the old name: two agents in one seat start with the same remembered name, and when the second takes its
+	// own name the first one's hook must stay with the first.
+	if old != "" && !s.nameInUse(old) {
+		for hookSession, b := range s.bound {
+			if b.name == old {
+				moved = append(moved, hookSession)
+			}
+		}
+	}
+	s.mu.Unlock()
+	if name == "" {
+		return
+	}
+	for _, hookSession := range moved {
+		s.bind(ctx, hookSession, name, now)
+	}
 }
 
-// index adds delta sessions with this pid and name to the pid index. Callers hold mu.
-func (s *server) index(pid int, name string, delta int) {
-	if pid <= 0 || name == "" {
+// nameInUse reports whether a live session has the name. Callers hold mu.
+func (s *server) nameInUse(name string) bool {
+	for _, sess := range s.sessions {
+		if sess.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+// index adds delta to the count of sessions with this session's machine, pid and name. Callers hold mu.
+func (s *server) index(sess *session, delta int) {
+	if sess.pid <= 0 || sess.Name == "" {
 		return
 	}
-	names := s.pids[pid]
+	key := pidKey{host: identity.HostOf(sess.Seat), pid: sess.pid}
+	names := s.pids[key]
 	if names == nil {
 		names = make(map[string]int)
-		s.pids[pid] = names
+		s.pids[key] = names
 	}
-	names[name] += delta
-	if names[name] <= 0 {
-		delete(names, name)
+	names[sess.Name] += delta
+	if names[sess.Name] <= 0 {
+		delete(names, sess.Name)
 	}
 	if len(names) == 0 {
-		delete(s.pids, pid)
+		delete(s.pids, key)
 	}
 }
 
-// dropIdle removes sessions unused for more than sessionIdle.
-func (s *server) dropIdle(now time.Time) {
+// noteNamed records that irc_name just set or confirmed the name: the start of its claim window.
+func (s *server) noteNamed(name string) {
+	if name == "" {
+		return
+	}
+	s.mu.Lock()
+	s.named[name] = s.clock.Now()
+	s.mu.Unlock()
+}
+
+// bind records that the agent CLI session's hook runs for the name, in memory and, when the binding is new or
+// changed or was last written more than bindingSave ago, in the database. A failed write is logged and the
+// binding still holds until the daemon stops.
+func (s *server) bind(ctx context.Context, hookSession, name string, now time.Time) {
+	s.mu.Lock()
+	b := s.bound[hookSession]
+	if b != nil && b.name == name && now.Sub(b.saved) < bindingSave {
+		b.lastUsed = now
+		s.mu.Unlock()
+		return
+	}
+	s.bound[hookSession] = &binding{name: name, lastUsed: now, saved: now}
+	bindings := s.bindings
+	s.mu.Unlock()
+	if bindings == nil {
+		return
+	}
+	if err := bindings.BindHookSession(ctx, hookSession, name, now); err != nil {
+		s.logf("error: bind hook session: %v", err)
+	}
+}
+
+// claim reports whether a hook may take the name it read from an irc_name result: irc_name set or confirmed that
+// exact name within claimWindow. The result is the agent's own, read by its own hook, so a fresh claim also moves a
+// name that an earlier session of the same agent held.
+func (s *server) claim(name string, now time.Time) bool {
+	if !names.Valid(name) {
+		return false
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	at, ok := s.named[name]
+	if !ok || now.Sub(at) > claimWindow || now.Before(at) {
+		return false
+	}
+	for hookSession, b := range s.bound {
+		if b.name == name {
+			delete(s.bound, hookSession) // one agent CLI session per name; the claimant is bound by the caller
+		}
+	}
+	return true
+}
+
+// dropIdle removes sessions unused for more than sessionIdle, hook-session bindings unused for more than
+// bindingIdle (in memory and in the database) and claim windows that have closed.
+func (s *server) dropIdle(ctx context.Context, now time.Time) {
+	s.mu.Lock()
 	for id, sess := range s.sessions {
 		if now.Sub(sess.lastUsed) > sessionIdle {
-			s.index(sess.pid, sess.Name, -1)
+			s.index(sess, -1)
 			delete(s.sessions, id)
 		}
+	}
+	for hookSession, b := range s.bound {
+		if now.Sub(b.lastUsed) > bindingIdle {
+			delete(s.bound, hookSession)
+		}
+	}
+	for name, at := range s.named {
+		if now.Sub(at) > claimWindow {
+			delete(s.named, name)
+		}
+	}
+	bindings := s.bindings
+	s.mu.Unlock()
+	if bindings == nil {
+		return
+	}
+	if _, err := bindings.PruneHookSessions(ctx, now.Add(-bindingIdle)); err != nil {
+		s.logf("error: prune hook sessions: %v", err)
 	}
 }
 
 // hookRequest is the body of POST /v1/hook. Every field is optional.
 type hookRequest struct {
-	Pids  []int  `json:"pids"`
-	Seat  string `json:"seat"`
-	Name  string `json:"name"`
-	Event string `json:"event"`
+	Pids    []int  `json:"pids"`
+	Seat    string `json:"seat"`
+	Name    string `json:"name"`
+	Event   string `json:"event"`
+	Session string `json:"session"` // the agent CLI's session id
+	Claimed string `json:"claimed"` // the name read from the irc_name result this event follows
 }
 
 // serveHook answers whether anything is due for the calling agent. It never fails loudly: errors answer 204.
@@ -341,25 +558,64 @@ func (s *server) resolve(ctx context.Context, req hookRequest) (string, error) {
 	if req.Name != "" {
 		return req.Name, nil
 	}
-	if name := s.nameForPids(req.Pids); name != "" {
-		return name, nil
+	now := s.clock.Now()
+	hookSession := req.Session
+	if !identity.ValidSession(hookSession) {
+		hookSession = ""
 	}
-	if req.Seat == "" {
-		return "", nil
+	if hookSession != "" {
+		// A fresh irc_name result comes first: it also covers an agent that just changed its name.
+		if req.Claimed != "" && s.claim(req.Claimed, now) {
+			s.bind(ctx, hookSession, req.Claimed, now)
+			return req.Claimed, nil
+		}
+		if name := s.boundName(ctx, hookSession, now); name != "" {
+			return name, nil
+		}
 	}
-	return s.chat.NameForSeat(ctx, req.Seat)
+	name := s.nameForPids(identity.HostOf(req.Seat), req.Pids)
+	if name == "" && req.Seat != "" {
+		var err error
+		if name, err = s.nameForSeat(ctx, req.Seat); err != nil {
+			return "", err
+		}
+	}
+	if name != "" && hookSession != "" {
+		// Learned: from now on this agent CLI session resolves by its id, whatever its process chain or seat.
+		s.bind(ctx, hookSession, name, now)
+	}
+	return name, nil
 }
 
-// nameForPids returns the name of the first pid, in the order given, that live sessions of exactly one name
-// reported. A pid shared by sessions with different names is ambiguous and skipped.
-func (s *server) nameForPids(pids []int) string {
+// boundName returns the name the agent CLI session is bound to, or "". It runs no SQL except to refresh the stored
+// last-used time, at most once per bindingSave.
+func (s *server) boundName(ctx context.Context, hookSession string, now time.Time) string {
+	s.mu.Lock()
+	b := s.bound[hookSession]
+	if b == nil {
+		s.mu.Unlock()
+		return ""
+	}
+	name := b.name
+	b.lastUsed = now
+	stale := now.Sub(b.saved) >= bindingSave
+	s.mu.Unlock()
+	if stale {
+		s.bind(ctx, hookSession, name, now)
+	}
+	return name
+}
+
+// nameForPids returns the name of the first pid on the machine, in the order given, that live sessions of exactly
+// one name reported. A pid shared by sessions with different names is ambiguous and skipped.
+func (s *server) nameForPids(host string, pids []int) string {
 	if len(pids) == 0 {
 		return ""
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, pid := range pids {
-		names := s.pids[pid]
+		names := s.pids[pidKey{host: host, pid: pid}]
 		if len(names) != 1 {
 			continue
 		}

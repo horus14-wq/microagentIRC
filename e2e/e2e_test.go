@@ -95,6 +95,10 @@ func (w *world) env(extra ...string) []string {
 		if strings.HasPrefix(kv, "MAIRC_") || strings.HasPrefix(kv, "TMUX") {
 			continue
 		}
+		// Nor the session id of an agent CLI the tests themselves run under: every agent here would share it.
+		if key, _, _ := strings.Cut(kv, "="); strings.HasSuffix(key, "_SESSION_ID") {
+			continue
+		}
 		env = append(env, kv)
 	}
 	return append(append(env, "MAIRC_HOME="+w.home), extra...)

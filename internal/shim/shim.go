@@ -23,6 +23,7 @@ type Options struct {
 	Token       string       // Authorization: Bearer <token>
 	Seat        string       // X-Mairc-Seat on initialize
 	AgentPID    int          // X-Mairc-Pid on initialize: the parent agent CLI
+	Session     string       // X-Mairc-Session on initialize: the CLI session id, when the environment has one
 	In          io.Reader    // the agent's stdout -> our stdin
 	Out         io.Writer    // our stdout -> the agent
 	StartDaemon func() error // starts the daemon detached; called when /healthz does not answer
@@ -170,6 +171,9 @@ func (s *shim) post(ctx context.Context, body []byte, isInit bool) (*http.Respon
 	if isInit {
 		req.Header.Set("X-Mairc-Seat", s.o.Seat)
 		req.Header.Set("X-Mairc-Pid", strconv.Itoa(s.o.AgentPID))
+		if s.o.Session != "" {
+			req.Header.Set("X-Mairc-Session", s.o.Session)
+		}
 	}
 	if s.sessionID != "" {
 		req.Header.Set("Mcp-Session-Id", s.sessionID)

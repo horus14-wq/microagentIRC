@@ -27,3 +27,10 @@ CREATE TABLE IF NOT EXISTS delivery (
   PRIMARY KEY (message_id, recipient)
 ) WITHOUT ROWID;
 CREATE INDEX IF NOT EXISTS delivery_unread ON delivery (recipient) WHERE delivered_ms IS NULL;
+
+-- Which name an agent CLI session's hook resolved to, so a daemon restart does not forget it.
+CREATE TABLE IF NOT EXISTS hook_session (
+  session      TEXT PRIMARY KEY,
+  name         TEXT NOT NULL,
+  last_used_ms INTEGER NOT NULL
+) WITHOUT ROWID;

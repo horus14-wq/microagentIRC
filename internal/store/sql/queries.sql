@@ -70,3 +70,16 @@ DELETE FROM message WHERE at_ms < ?;
 
 -- name: PruneByCount
 DELETE FROM message WHERE id < (SELECT id FROM message ORDER BY id DESC LIMIT 1 OFFSET ?);
+
+-- name: BindHookSession
+INSERT INTO hook_session (session, name, last_used_ms) VALUES (?, ?, ?)
+ON CONFLICT (session) DO UPDATE SET name = excluded.name, last_used_ms = excluded.last_used_ms;
+
+-- name: HookSessions
+SELECT session, name FROM hook_session;
+
+-- name: PruneHookSessions
+DELETE FROM hook_session WHERE last_used_ms < ?;
+
+-- name: MoveSeat
+UPDATE agent SET seat = ? WHERE name = ? AND seat = ?;

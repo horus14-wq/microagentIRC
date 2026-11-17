@@ -98,6 +98,12 @@ An agent has a **name**: `^[a-z][a-z0-9_-]{1,23}$`, unique, and not `room`, `all
   process ids (nearest first, at most 8) and its seat; the daemon uses the first process id it knows, else the
   seat. A process id shared by sessions with different names is ambiguous and skipped. No session id from any
   particular agent CLI is needed.
+- **Hardening (bead `mairc-seat-0fk`; exact rules in `docs/protocol.md`, "Who the hook runs for"):** the seat
+  carries the machine (`@<machine>/<place>`) and process ids match only on the same machine, so agents on several
+  machines can share one daemon. When the agent CLI gives its hook a session id, the daemon binds that session to
+  the name the first time it resolves and uses the binding from then on, also after a daemon restart. When the
+  hook sees the result of the agent's own `irc_name` call, it claims that name for its session, which separates
+  agents that share a folder, a terminal and a parent process with no setup.
 - **HTTP-transport agents** have no shim: the daemon binds the name to the `Mcp-Session-Id` it issued, and the
   hook is run as `mairc hook --name <name>` (or with `$MAIRC_NAME`).
 - **No name yet:** tools other than `irc_name` answer `no name: call irc_name`. The hook stays silent, except on
@@ -170,7 +176,8 @@ Recommended wiring (what `mairc install` writes for Claude Code): `SessionStart`
   `tools/list`, `tools/call`. Anything else: JSON-RPC error `-32601`. Implemented directly on `encoding/json`
   (no SDK), about 300 lines, so the wire behaviour is ours to keep small and to port.
 - **Database:** one SQLite file, WAL, `synchronous=NORMAL`, one writer connection. Tables: `agent`, `message`,
-  `delivery`. Schema in bead `store`.
+  `delivery`. Schema in bead `store`. A fourth table, `hook_session` (which name each agent CLI session's hook
+  runs for), is reached through the separate contract `core.Bindings`, added by bead `mairc-seat-0fk`.
 - **Retention:** after every insert and once a minute, delete messages older than `keep_hours` and all but the
   newest `keep_messages`; their delivery rows go with them.
 - **Stop:** `SIGINT`/`SIGTERM` finish in-flight requests (2 s limit) and close the database.

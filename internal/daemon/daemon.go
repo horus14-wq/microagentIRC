@@ -124,6 +124,11 @@ func run(ctx context.Context, o Options, logf func(format string, args ...any)) 
 	reload := reloader(o.Paths.Config, service, cur, logf)
 	srv := newServer(service, mcp.New(serverName, o.Version, tools.All(service)), token, o.Version, reload,
 		o.Clock, logf)
+	// Which name each agent CLI session's hook runs for survives a restart: it is in the same database.
+	if err := srv.useBindings(ctx, st); err != nil {
+		_ = ln.Close()
+		return err
+	}
 	if err := os.WriteFile(o.Paths.PID, []byte(strconv.Itoa(os.Getpid())+"\n"), 0o600); err != nil {
 		_ = ln.Close()
 		return err
@@ -151,7 +156,7 @@ func run(ctx context.Context, o Options, logf func(format string, args ...any)) 
 			if _, err := st.Prune(ctx, now, s.KeepHours, s.KeepMessages); err != nil {
 				logf("error: prune: %v", err)
 			}
-			srv.dropIdle(now)
+			srv.dropIdle(ctx, now)
 		case err := <-served:
 			return err
 		case <-ctx.Done():

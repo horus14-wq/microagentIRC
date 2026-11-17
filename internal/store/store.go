@@ -436,3 +436,62 @@ func (s *Store) Prune(ctx context.Context, now time.Time, keepHours, keepMessage
 	})
 	return int(deleted), err
 }
+
+// BindHookSession records that the hook session belongs to the name (core.Bindings).
+func (s *Store) BindHookSession(ctx context.Context, session, name string, now time.Time) error {
+	_, err := s.stmts["BindHookSession"].ExecContext(ctx, session, name, ms(now))
+	return err
+}
+
+// HookSessions returns every stored binding, session to name (core.Bindings).
+func (s *Store) HookSessions(ctx context.Context) (map[string]string, error) {
+	rows, err := s.stmts["HookSessions"].QueryContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	out := make(map[string]string)
+	for rows.Next() {
+		var session, name string
+		if err := rows.Scan(&session, &name); err != nil {
+			return nil, err
+		}
+		out[session] = name
+	}
+	return out, rows.Err()
+}
+
+// PruneHookSessions deletes bindings last used before the given time (core.Bindings).
+func (s *Store) PruneHookSessions(ctx context.Context, before time.Time) (int, error) {
+	res, err := s.stmts["PruneHookSessions"].ExecContext(ctx, ms(before))
+	if err != nil {
+		return 0, err
+	}
+	n, err := res.RowsAffected()
+	return int(n), err
+}
+
+// MoveSeat rebinds the name from one seat to another; it changes nothing unless the name is bound to from. A
+// seat has one name, so whatever other name held the new seat is released first (core.Bindings).
+func (s *Store) MoveSeat(ctx context.Context, name, from, to string) error {
+	if from == "" || to == "" || from == to {
+		return nil
+	}
+	return s.inTx(ctx, func(tx *sql.Tx) error {
+		var current sql.NullString
+		seatOf := tx.StmtContext(ctx, s.stmts["AgentSeat"])
+		defer func() { _ = seatOf.Close() }()
+		err := seatOf.QueryRowContext(ctx, name).Scan(&current)
+		if errors.Is(err, sql.ErrNoRows) || (err == nil && current.String != from) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if _, err := s.exec(ctx, tx, "ReleaseSeat", to, name); err != nil {
+			return err
+		}
+		_, err = s.exec(ctx, tx, "MoveSeat", to, name, from)
+		return err
+	})
+}

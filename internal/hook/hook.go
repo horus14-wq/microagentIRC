@@ -12,8 +12,12 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
+
+	"github.com/horus14-wq/microagentIRC/internal/identity"
+	"github.com/horus14-wq/microagentIRC/internal/names"
 )
 
 // maxStdin bounds how much of the agent CLI's hook JSON is read to find the event name.
@@ -35,6 +39,9 @@ type Options struct {
 	Stdin   io.Reader     // the hook JSON from the agent CLI; may be nil
 	Stdout  io.Writer     // where the delivery is printed
 	Host    string        // the CLI actually running the hook (HostFrom): "", HostGrok or HostDevin
+	Session string        // the CLI session id from the environment (identity.SessionFromEnv); stdin's wins
+
+	claimed string // the name read from an irc_name result on stdin; set by Run
 }
 
 // The CLIs that run Claude Code's hooks but read hook output differently (docs/compat.md).
@@ -73,23 +80,32 @@ func hostDelivers(host, event string) bool {
 	return true
 }
 
-// request is the body of POST /v1/hook.
+// request is the body of POST /v1/hook. Session and Claimed are left out when empty, so an agent CLI that gives
+// the hook neither sends exactly what it sent before they existed.
 type request struct {
-	PIDs  []int  `json:"pids"`
-	Seat  string `json:"seat"`
-	Name  string `json:"name"`
-	Event string `json:"event"`
+	PIDs    []int  `json:"pids"`
+	Seat    string `json:"seat"`
+	Name    string `json:"name"`
+	Event   string `json:"event"`
+	Session string `json:"session,omitempty"`
+	Claimed string `json:"claimed,omitempty"`
 }
 
 // Run performs one hook check. It always returns 0: a hook must never fail the agent's turn.
 func Run(ctx context.Context, o Options) int {
+	in := readStdin(o.Stdin)
 	event := o.Event
 	if event == "" {
-		event = eventFromStdin(o.Stdin)
+		event = in.event
 	}
 	if !hostDelivers(o.Host, event) {
 		return 0
 	}
+	// The session id the agent CLI passed on stdin wins over the one in the environment: stdin is this event's.
+	if in.session != "" {
+		o.Session = in.session
+	}
+	o.claimed = in.claimed
 	body, ok := ask(ctx, o, event)
 	if !ok || o.Stdout == nil {
 		return 0
@@ -102,24 +118,115 @@ func Run(ctx context.Context, o Options) int {
 	return 0
 }
 
-// eventFromStdin reads at most maxStdin bytes and returns the string hook_event_name of a JSON object, or "" for
-// anything else (nil, empty, not JSON, not an object, a non-string name, a read error). A nil reader is not read, so
+// stdinFacts is what the hook takes from the JSON the agent CLI passes on stdin.
+type stdinFacts struct {
+	event   string // hook_event_name
+	session string // the CLI's session id, when valid
+	claimed string // the name the agent was just given by irc_name, when this event follows that call
+}
+
+// readStdin reads at most maxStdin bytes and returns what a JSON object there says; every field is "" for anything
+// else (nil, empty, not JSON, not an object, a field of another type, a read error). A nil reader is not read, so
 // the hook never waits on a terminal.
-func eventFromStdin(stdin io.Reader) string {
+//
+// Field names, from docs/compat.md (read from each CLI's documentation or a recorded hook input):
+//   - the session id: `session_id` (Claude Code, Codex, Devin, and Grok's Claude-style alias), `sessionId`
+//     (Grok, Gemini CLI), `conversationId` (Antigravity);
+//   - after a tool call (`PostToolUse`): `tool_name` and `tool_response` (Claude Code, Codex, Devin, Grok's alias).
+func readStdin(stdin io.Reader) stdinFacts {
 	if stdin == nil {
-		return ""
+		return stdinFacts{}
 	}
 	raw, err := io.ReadAll(io.LimitReader(stdin, maxStdin))
 	if err != nil || len(raw) == 0 {
-		return ""
+		return stdinFacts{}
 	}
 	var v struct {
-		HookEventName string `json:"hook_event_name"`
+		HookEventName  string          `json:"hook_event_name"`
+		SessionID      string          `json:"session_id"`
+		SessionIDCamel string          `json:"sessionId"`
+		ConversationID string          `json:"conversationId"`
+		ToolName       string          `json:"tool_name"`
+		ToolResponse   json.RawMessage `json:"tool_response"`
 	}
 	if json.Unmarshal(raw, &v) != nil {
+		// One field of an unexpected type must not cost the others: read each on its own.
+		var loose map[string]json.RawMessage
+		if json.Unmarshal(raw, &loose) != nil {
+			return stdinFacts{}
+		}
+		text := func(key string) string {
+			var s string
+			_ = json.Unmarshal(loose[key], &s)
+			return s
+		}
+		v.HookEventName, v.SessionID = text("hook_event_name"), text("session_id")
+		v.SessionIDCamel, v.ConversationID = text("sessionId"), text("conversationId")
+		v.ToolName, v.ToolResponse = text("tool_name"), loose["tool_response"]
+	}
+	facts := stdinFacts{event: v.HookEventName}
+	for _, id := range []string{v.SessionID, v.SessionIDCamel, v.ConversationID} {
+		if identity.ValidSession(id) {
+			facts.session = id
+			break
+		}
+	}
+	facts.claimed = claimedName(v.ToolName, v.ToolResponse)
+	return facts
+}
+
+// namePrefix is the start of irc_name's result: "you are <name>".
+const namePrefix = "you are "
+
+// claimedName returns the name irc_name just gave the agent, when this hook event follows that tool call: the tool
+// name ends with "irc_name" (agent CLIs prefix MCP tools, for example "mcp__mairc__irc_name") and its result holds a
+// text that is exactly "you are <name>" with a valid name. Anything else is "".
+//
+// The result's shape differs by CLI (a string, an object with a text or output field, a list of content blocks), so
+// every string in it is looked at, to a small depth.
+func claimedName(tool string, response json.RawMessage) string {
+	if !strings.HasSuffix(tool, "irc_name") || len(response) == 0 {
 		return ""
 	}
-	return v.HookEventName
+	var v any
+	if json.Unmarshal(response, &v) != nil {
+		return ""
+	}
+	return findName(v, 4)
+}
+
+func findName(v any, depth int) string {
+	switch x := v.(type) {
+	case string:
+		if name, ok := strings.CutPrefix(strings.TrimSpace(x), namePrefix); ok && names.Valid(name) {
+			return name
+		}
+	case []any:
+		if depth == 0 {
+			return ""
+		}
+		for _, item := range x {
+			if name := findName(item, depth-1); name != "" {
+				return name
+			}
+		}
+	case map[string]any:
+		if depth == 0 {
+			return ""
+		}
+		// A fixed order, so the same input always gives the same answer.
+		keys := make([]string, 0, len(x))
+		for key := range x {
+			keys = append(keys, key)
+		}
+		slices.Sort(keys)
+		for _, key := range keys {
+			if name := findName(x[key], depth-1); name != "" {
+				return name
+			}
+		}
+	}
+	return ""
 }
 
 // ask sends one POST /v1/hook under one total deadline (connection, request and body) and returns the body of a 200
@@ -135,7 +242,9 @@ func ask(ctx context.Context, o Options, event string) (string, bool) {
 	if pids == nil {
 		pids = []int{}
 	}
-	payload, err := json.Marshal(request{PIDs: pids, Seat: o.Seat, Name: o.Name, Event: event})
+	payload, err := json.Marshal(request{
+		PIDs: pids, Seat: o.Seat, Name: o.Name, Event: event, Session: o.Session, Claimed: o.claimed,
+	})
 	if err != nil {
 		return "", false
 	}
