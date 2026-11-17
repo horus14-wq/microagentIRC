@@ -1,0 +1,1 @@
+{"hookSpecificOutput":{"hookEventName":"PostToolUse","additionalContext":"irc:\n#main greenfox1: the build is green\npm bluecat2: can you review \"parser.go\" <today>?"}}
