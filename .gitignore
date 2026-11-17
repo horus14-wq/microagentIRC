@@ -1,0 +1,11 @@
+/bin/
+/dist/
+*.db
+*.db-wal
+*.db-shm
+*.test
+*.out
+.beads/*.db
+.beads/*.db-wal
+.beads/*.db-shm
+.beads/.br-agent.lock
