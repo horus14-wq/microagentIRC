@@ -8,7 +8,7 @@ action; this report says whether it is safe and what to decide first.
 **Not yet, because of three owner decisions; no secret was found.** None of the three is a leak. Once the owner has
 made them (below), it is **safe to flip**:
 
-1. **Choose a licence.** There is no `LICENSE` file. A public repository without one is "all rights reserved", so
+1. **Choose a licence. DECIDED 17 Nov 2026 by the owner: Apache-2.0 (the `LICENSE` and `NOTICE` files are added).** Original finding: there was no `LICENSE` file. A public repository without one is "all rights reserved", so
    others may read it but not use, modify or redistribute it. The recommendation is **MIT** (shortest, matches most
    dependencies) or **Apache-2.0** (adds an explicit patent grant). Add the file with the owner's name and year.
 2. **Decide what happens to `.beads/`** (the tracker). See below; the recommendation is to keep it public.

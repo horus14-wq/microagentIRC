@@ -115,4 +115,6 @@ Unix directory/private-file modes are `0700`/`0600`; Windows relies on profile-d
 Read [plan.md](plan.md), [AGENTS.md](AGENTS.md) and [docs/protocol.md](docs/protocol.md) before changing the code.
 Run `gofumpt -l .`, `go vet ./...`, `golangci-lint run` and `CGO_ENABLED=1 go test -race -count=1 ./...`;
 race tests require a C compiler. Normal builds use `CGO_ENABLED=0`.
-Status: **0.1.0**, private prototype; Linux tested, macOS/Windows ports and CI matrix in progress. No license file yet.
+Status: **0.1.0**, private prototype; Linux tested, macOS/Windows ports and CI matrix in progress.
+
+License: [Apache License 2.0](LICENSE) (owner's decision, 17 Nov 2026). See [NOTICE](NOTICE).
