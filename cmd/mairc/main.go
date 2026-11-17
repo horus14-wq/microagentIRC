@@ -16,6 +16,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -333,7 +334,7 @@ func runInstall(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	return install.Run(install.Options{
 		Binary: binary, Scope: *scope, Home: home, Project: cwd,
 		Print: *printOnly, Uninstall: *uninstall, Out: stdout,
-		Only: onlyList, DryRun: *dryRun, Confirm: confirm, LookPath: exec.LookPath,
+		Only: onlyList, DryRun: *dryRun, Confirm: confirm, LookPath: exec.LookPath, GOOS: runtime.GOOS,
 	})
 }
 

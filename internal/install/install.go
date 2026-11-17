@@ -39,6 +39,8 @@ type Options struct {
 	Confirm func(files []string) bool
 	// LookPath finds a CLI's binary for detection (exec.LookPath in production); nil detects by config directory only.
 	LookPath func(file string) (string, error)
+	// GOOS selects per-OS configuration paths (runtime.GOOS in production; "" means linux rules).
+	GOOS string
 }
 
 // hookEvents returns the Claude Code events mairc's hook runs on, in the order they are written.

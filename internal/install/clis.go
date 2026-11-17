@@ -41,7 +41,53 @@ type hookSpec struct {
 
 // clis returns the supported CLIs in the order they are reported.
 func clis() []cliSpec {
-	return []cliSpec{claudeCode()}
+	return []cliSpec{claudeCode(), devin(), primeAgent()}
+}
+
+// devin is Devin CLI (docs/compat.md, "Devin CLI", 3000.13.4): MCP servers in ~/.config/devin/mcp_config.json (user;
+// %APPDATA%\devin on Windows) or <project>/.devin/mcp_config.json, key mcpServers, stdio entries command/args. MCP
+// only: Devin also runs the hooks in Claude Code's settings files, so the Claude row's hook reaches Devin seats.
+func devin() cliSpec {
+	return cliSpec{
+		name:     "devin",
+		binaries: []string{"devin"},
+		dirs:     []string{filepath.Join(".config", "devin")},
+		files: func(scope string, o Options) []fileSpec {
+			path := filepath.Join(o.Home, ".config", "devin", "mcp_config.json")
+			if o.GOOS == "windows" {
+				path = filepath.Join(o.Home, "AppData", "Roaming", "devin", "mcp_config.json")
+			}
+			if scope == "project" {
+				path = filepath.Join(o.Project, ".devin", "mcp_config.json")
+			}
+			return []fileSpec{{path: path, format: "json", server: &entrySpec{
+				keyPath: []string{"mcpServers"}, name: "mairc", value: stdioServer,
+			}}}
+		},
+	}
+}
+
+// primeAgent is Prime Agent (docs/compat.md, "Prime Agent", 0.10.0): MCP servers in ~/.prime/agent/settings.json or
+// <project>/.prime/agent/settings.json, key mcpServers, with an explicit "type":"stdio". It has no hook system, so
+// mail reaches it only when the agent calls irc_read (the fallback, mairc-hd5).
+func primeAgent() cliSpec {
+	return cliSpec{
+		name:     "prime-agent",
+		binaries: []string{"prime-agent"},
+		dirs:     []string{filepath.Join(".prime", "agent")},
+		files: func(scope string, o Options) []fileSpec {
+			base := o.Home
+			if scope == "project" {
+				base = o.Project
+			}
+			return []fileSpec{{
+				path: filepath.Join(base, ".prime", "agent", "settings.json"), format: "json",
+				server: &entrySpec{keyPath: []string{"mcpServers"}, name: "mairc", value: func(binary string) *node {
+					return object("type", str("stdio"), "command", str(binary), "args", array(str("stdio")))
+				}},
+			}}
+		},
+	}
 }
 
 // claudeCode is Claude Code (docs/compat.md, "Claude Code"; checked against code.claude.com/docs/en/mcp and /hooks

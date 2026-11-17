@@ -52,8 +52,15 @@ func TestDetectionSetsUpWhatIsPresentAndSkipsTheRest(t *testing.T) {
 			if code != 0 || (statErr == nil) != tc.wantSet {
 				t.Fatalf("Run = %d, out %q, %s written: %v", code, out, mcp, statErr == nil)
 			}
-			if !tc.wantSet && out != "claude: not found, skipped\nalready installed\n" {
-				t.Fatalf("out = %q", out)
+			if !tc.wantSet {
+				var want strings.Builder
+				for _, c := range clis() {
+					want.WriteString(c.name + ": not found, skipped\n")
+				}
+				want.WriteString("already installed\n")
+				if out != want.String() {
+					t.Fatalf("out = %q, want %q", out, want.String())
+				}
 			}
 		})
 	}
@@ -165,5 +172,68 @@ func TestJSONWriterNestedEntry(t *testing.T) {
 	bad, _ := parse([]byte(`{"mcp": []}`))
 	if _, ok := applyJSON(bad, spec, "/bin/mairc", false); ok {
 		t.Fatal("a non-object on the key path must refuse")
+	}
+}
+
+// Every row, both scopes: the files it names keep other content, gain mairc once, a second run changes nothing, and
+// uninstall restores the original bytes.
+func TestEveryRowMergesIdempotentlyAndUninstallsExactly(t *testing.T) {
+	const fixture = "{\n  \"keep\": {\n    \"a\": 1\n  }\n}\n"
+	for _, c := range clis() {
+		for _, scope := range []string{"user", "project"} {
+			t.Run(c.name+"/"+scope, func(t *testing.T) {
+				home, project := t.TempDir(), t.TempDir()
+				o := Options{Binary: testBinary, Scope: scope, Home: home, Project: project, Only: []string{c.name}}
+				files := c.files(scope, o)
+				for _, f := range files {
+					write(t, f.path, fixture, 0o600)
+				}
+				if code, out := runRaw(o); code != 0 || strings.Count(out, "updated ") != len(files) {
+					t.Fatalf("install = %d, out %q", code, out)
+				}
+				for _, f := range files {
+					got := string(read(t, f.path))
+					if !strings.HasPrefix(got, "{\n  \"keep\": {\n    \"a\": 1\n  },\n") || !strings.Contains(got, testBinary) {
+						t.Fatalf("%s lost the fixture or lacks mairc:\n%s", f.path, got)
+					}
+				}
+				if code, out := runRaw(o); code != 0 || out != "already installed\n" {
+					t.Fatalf("second install = %d, out %q", code, out)
+				}
+				o.Uninstall = true
+				if code, _ := runRaw(o); code != 0 {
+					t.Fatalf("uninstall = %d", code)
+				}
+				for _, f := range files {
+					if got := string(read(t, f.path)); got != fixture {
+						t.Fatalf("uninstall did not restore %s:\n%s", f.path, got)
+					}
+				}
+			})
+		}
+	}
+}
+
+// The MCP entry each new row writes into a fresh file, exactly.
+func TestNewRowsWriteTheirDocumentedEntry(t *testing.T) {
+	stdio := "{\n  \"mcpServers\": {\n    \"mairc\": {\n      \"command\": \"" + testBinary + "\",\n      \"args\": [\n        \"stdio\"\n      ]\n    }\n  }\n}\n"
+	typed := "{\n  \"mcpServers\": {\n    \"mairc\": {\n      \"type\": \"stdio\",\n      \"command\": \"" + testBinary + "\",\n      \"args\": [\n        \"stdio\"\n      ]\n    }\n  }\n}\n"
+	cases := []struct {
+		cli, goos, rel, want string
+	}{
+		{"devin", "linux", filepath.Join(".config", "devin", "mcp_config.json"), stdio},
+		{"devin", "windows", filepath.Join("AppData", "Roaming", "devin", "mcp_config.json"), stdio},
+		{"prime-agent", "linux", filepath.Join(".prime", "agent", "settings.json"), typed},
+	}
+	for _, tc := range cases {
+		t.Run(tc.cli+"/"+tc.goos, func(t *testing.T) {
+			home := t.TempDir()
+			if code, out := runRaw(Options{Binary: testBinary, Home: home, Only: []string{tc.cli}, GOOS: tc.goos}); code != 0 {
+				t.Fatalf("install = %d, out %q", code, out)
+			}
+			if got := string(read(t, filepath.Join(home, tc.rel))); got != tc.want {
+				t.Fatalf("%s:\n%s\nwant:\n%s", tc.rel, got, tc.want)
+			}
+		})
 	}
 }
