@@ -1,6 +1,7 @@
 package install
 
 import (
+	"strconv"
 	"strings"
 )
 
@@ -118,6 +119,55 @@ func tomlString(s string) string {
 	}
 	b.WriteByte('"')
 	return b.String()
+}
+
+// tomlUnquote reads back a TOML basic string as tomlString writes it ("..." with \" \\ \n \r \t \uXXXX escapes);
+// ok=false for anything else.
+func tomlUnquote(quoted string) (string, bool) {
+	if len(quoted) < 2 || quoted[0] != '"' || quoted[len(quoted)-1] != '"' {
+		return "", false
+	}
+	body := quoted[1 : len(quoted)-1]
+	var b strings.Builder
+	for i := 0; i < len(body); i++ {
+		c := body[i]
+		if c == '"' {
+			return "", false
+		}
+		if c != '\\' {
+			b.WriteByte(c)
+			continue
+		}
+		if i+1 >= len(body) {
+			return "", false
+		}
+		i++
+		switch body[i] {
+		case '"':
+			b.WriteByte('"')
+		case '\\':
+			b.WriteByte('\\')
+		case 'n':
+			b.WriteByte('\n')
+		case 'r':
+			b.WriteByte('\r')
+		case 't':
+			b.WriteByte('\t')
+		case 'u':
+			if i+4 >= len(body) {
+				return "", false
+			}
+			v, err := strconv.ParseUint(body[i+1:i+5], 16, 16)
+			if err != nil {
+				return "", false
+			}
+			b.WriteRune(rune(v))
+			i += 4
+		default:
+			return "", false
+		}
+	}
+	return b.String(), true
 }
 
 func hex4(r rune) string {

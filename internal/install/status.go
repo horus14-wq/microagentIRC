@@ -207,8 +207,10 @@ func blockIn(raw []byte, spec *blockSpec) (bool, string) {
 		case strings.HasPrefix(trimmed, spec.end):
 			inside = false
 		case inside:
-			if command, found := strings.CutPrefix(strings.TrimSpace(trimmed), "command = \""); found {
-				return true, strings.TrimSuffix(command, "\"")
+			if value, found := strings.CutPrefix(strings.TrimSpace(trimmed), "command = "); found {
+				// The installer escapes the path (tomlString): a Windows path's backslashes are doubled in the file.
+				command, _ := tomlUnquote(value)
+				return true, command
 			}
 		case strings.HasPrefix(trimmed, begin):
 			inside = true

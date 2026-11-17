@@ -35,9 +35,9 @@ func TestStatusesReportsWhatInstallWrote(t *testing.T) {
 	bin := filepath.Join(home, "bin", "mairc")
 	writeFile(t, bin, "#!/bin/sh\n")
 	// Claude Code user scope: the MCP entry and the hook mairc writes.
-	writeFile(t, filepath.Join(home, ".claude.json"), `{"mcpServers":{"mairc":{"command":"`+bin+`","args":["stdio"]}}}`)
-	writeFile(t, filepath.Join(home, ".claude", "settings.json"), `{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"`+
-		bin+` hook --client claude","timeout":5}]}]}}`)
+	writeFile(t, filepath.Join(home, ".claude.json"), `{"mcpServers":{"mairc":{"command":`+jsonString(bin)+`,"args":["stdio"]}}}`)
+	writeFile(t, filepath.Join(home, ".claude", "settings.json"), `{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":`+
+		jsonString(bin+" hook --client claude")+`,"timeout":5}]}]}}`)
 	o := Options{Binary: bin, Scope: "user", Home: home, Project: project, GOOS: "linux"}
 	claude := statusFor(t, o, "claude")
 	switch {
@@ -69,10 +69,16 @@ func TestStatusesReadsTheTOMLBlockCommand(t *testing.T) {
 	bin := filepath.Join(home, "mairc")
 	begin, end := tomlMarkers()
 	writeFile(t, filepath.Join(home, ".codex", "config.toml"),
-		"model = \"x\"\n\n"+begin+"\n[mcp_servers.mairc]\ncommand = \""+bin+"\"\nargs = [\"stdio\"]\n"+end+"\n")
+		"model = \"x\"\n\n"+begin+"\n"+tomlMCPServer(bin)+end+"\n") // as the installer writes it (escaped)
 	codex := statusFor(t, Options{Scope: "user", Home: home}, "codex")
 	if !codex.MCPPresent || codex.MCPCommand != bin {
 		t.Fatalf("codex = %v %q, want present with %q", codex.MCPPresent, codex.MCPCommand, bin)
+	}
+	// A Windows path is written escaped (backslashes doubled) and must read back as the path, on any host.
+	winBin := `C:\Users\a b\bin\mairc.exe`
+	writeFile(t, filepath.Join(home, ".codex", "config.toml"), begin+"\n"+tomlMCPServer(winBin)+end+"\n")
+	if codex := statusFor(t, Options{Scope: "user", Home: home}, "codex"); codex.MCPCommand != winBin {
+		t.Fatalf("codex command = %q, want %q", codex.MCPCommand, winBin)
 	}
 }
 
@@ -116,7 +122,7 @@ func TestStatusesHonoursOnlyAndLeavesUndetectedCLIsOut(t *testing.T) {
 func TestStatusesFindsAProjectScopeFile(t *testing.T) {
 	home, project := t.TempDir(), t.TempDir()
 	bin := filepath.Join(home, "mairc")
-	writeFile(t, filepath.Join(project, ".mcp.json"), `{"mcpServers":{"mairc":{"command":"`+bin+`","args":["stdio"]}}}`)
+	writeFile(t, filepath.Join(project, ".mcp.json"), `{"mcpServers":{"mairc":{"command":`+jsonString(bin)+`,"args":["stdio"]}}}`)
 	s := Statuses(Options{Scope: "project", Home: home, Project: project, Only: []string{"claude"}})[0]
 	if s.MCPPath != filepath.Join(project, ".mcp.json") || !s.MCPPresent {
 		t.Fatalf("project claude = %+v", s)
@@ -136,5 +142,27 @@ func TestStatusesReadsOpenCodeCommandArray(t *testing.T) {
 	s := statusFor(t, Options{Scope: "user", Home: home}, "opencode")
 	if !s.MCPPresent || s.MCPCommand != bin {
 		t.Fatalf("opencode = %v %q, want present with %q", s.MCPPresent, s.MCPCommand, bin)
+	}
+}
+
+// jsonString is s as a JSON string literal: a Windows path's backslashes must be escaped to stay valid JSON.
+func jsonString(s string) string {
+	b, _ := json.Marshal(s)
+	return string(b)
+}
+
+// The doctor reads back what the block writer wrote, a Windows path included.
+func TestTOMLStringRoundTrips(t *testing.T) {
+	for _, s := range []string{
+		`/opt/mairc/bin/mairc`, `C:\Users\a b\bin\mairc.exe`, `\\server\share\mairc.exe`, "quote\" tab\t ctl\x01 nl\n",
+	} {
+		if got, ok := tomlUnquote(tomlString(s)); !ok || got != s {
+			t.Errorf("tomlUnquote(tomlString(%q)) = %q, %v", s, got, ok)
+		}
+	}
+	for _, bad := range []string{``, `"`, `noquotes`, `"bad \q escape"`, `"dangling \"`, `"inner " quote"`, `"\u12"`} {
+		if _, ok := tomlUnquote(bad); ok {
+			t.Errorf("tomlUnquote(%q) accepted", bad)
+		}
 	}
 }
