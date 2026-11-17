@@ -1,0 +1,4 @@
+{
+  "in": "{\"jsonrpc\":\"2.0\",\"id\":8,\"method\":\"resources/list\"}",
+  "out": "{\"jsonrpc\":\"2.0\",\"id\":8,\"error\":{\"code\":-32601,\"message\":\"method not found\"}}"
+}

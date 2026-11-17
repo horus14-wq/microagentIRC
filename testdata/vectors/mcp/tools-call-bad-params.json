@@ -1,0 +1,4 @@
+{
+  "in": "{\"jsonrpc\":\"2.0\",\"id\":7,\"method\":\"tools/call\",\"params\":[]}",
+  "out": "{\"jsonrpc\":\"2.0\",\"id\":7,\"error\":{\"code\":-32602,\"message\":\"invalid params\"}}"
+}

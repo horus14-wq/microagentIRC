@@ -1,0 +1,4 @@
+{
+  "in": "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/list\"}",
+  "out": "{\"jsonrpc\":\"2.0\",\"id\":3,\"result\":{\"tools\":[{\"name\":\"echo\",\"description\":\"Echo the text back to the caller.\",\"inputSchema\":{\"additionalProperties\":false,\"properties\":{\"text\":{\"type\":\"string\"}},\"required\":[\"text\"],\"type\":\"object\"}},{\"name\":\"fail\",\"description\":\"Fail on purpose, as a tool result.\",\"inputSchema\":{\"additionalProperties\":false,\"properties\":{},\"type\":\"object\"}}]}}"
+}

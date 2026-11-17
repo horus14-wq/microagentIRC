@@ -1,0 +1,4 @@
+{
+  "in": "{\"jsonrpc\":\"2.0\",",
+  "out": "{\"jsonrpc\":\"2.0\",\"id\":null,\"error\":{\"code\":-32700,\"message\":\"parse error\"}}"
+}

@@ -1,0 +1,4 @@
+{
+  "in": "{\"jsonrpc\":\"2.0\",\"id\":\"abc-1\",\"method\":\"ping\"}",
+  "out": "{\"jsonrpc\":\"2.0\",\"id\":\"abc-1\",\"result\":{}}"
+}

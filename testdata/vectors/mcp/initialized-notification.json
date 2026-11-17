@@ -1,0 +1,4 @@
+{
+  "in": "{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}",
+  "out": null
+}
