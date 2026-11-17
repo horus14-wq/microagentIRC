@@ -7,13 +7,24 @@ The wire protocol of mairc, written down for a future port. Every shape here is 
 `mairc daemon` listens on the `listen` setting (loopback only, default `127.0.0.1:4747`).
 
 In version 0.1.0 the daemon accepts no other kind of address. Agents on other machines reach it through a port
-forward from their own loopback address to the daemon's, with a copy of the daemon's token (README, "Agents on
-several machines"). Nothing in the protocol changes for them: the seat they send names their machine, and process
-ids are matched per machine.
+forward from their own loopback address to the daemon's, each machine with a token of its own
+([docs/multi-machine.md](multi-machine.md)). Nothing else in the protocol changes for them: the seat they send
+names their machine, and process ids are matched per machine.
 
-- **Auth.** Every endpoint except `/healthz` requires `Authorization: Bearer <token>`, where the token is the
-  content of `$MAIRC_HOME/token` (64 hex characters, mode 0600, created by the daemon when missing). A missing or
-  wrong header answers `401` with an empty body. The comparison is constant-time.
+- **Auth.** Every endpoint except `/healthz` requires `Authorization: Bearer <token>`. A missing or unknown token
+  answers `401` with an empty body. Two kinds of token are accepted:
+  - the **hub token**, the content of `$MAIRC_HOME/token` (64 hex characters, mode 0600, created by the daemon
+    when missing; compared in constant time). It may do everything.
+  - a **machine token**, one per other machine, made on the hub with `mairc token add <machine>`. The hub keeps
+    only its SHA-256, in `machines.json` beside the token. A request made with it may act only for that machine:
+    - `initialize` must carry a seat on that machine (`@<machine>/...`), else `403`;
+    - a session answers only to the token that opened it; to any other token it is unknown (`404`);
+    - `POST /v1/hook` must carry a seat on that machine and no `name`, else `403`; and whatever the request
+      resolves to, messages are handed over only for a name whose seat is on that machine;
+    - `POST /v1/reload` answers `403`; `GET /v1/status` is allowed.
+  Tokens are read again on `POST /v1/reload` (`mairc token rotate|add|revoke` ask for it): a rotated hub token
+  replaces the old one at once, and a revoked machine's token and sessions are gone at once. A shim that is
+  answered `401` reads its token file again and retries once.
 - **Bodies.** A request body larger than 64 KiB answers `413`.
 - **Methods.** A known path with another method answers `405` with an `Allow` header. An unknown path answers
   `404` (after auth).
@@ -136,7 +147,8 @@ Answers:
 Re-reads and validates `$MAIRC_HOME/config.json` and puts it in force. `204` on success. An invalid file answers
 `400`, `Content-Type: text/plain; charset=utf-8`, with the error text as the body (for example
 `max_public_len: must be between 1 and 999`); the settings in force stay. A changed `listen` takes effect at the
-next start.
+next start. It also reads the hub token and `machines.json` again; if they cannot be read it answers `400` and
+the tokens in force stay.
 
 ### `GET /v1/status`
 

@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
@@ -60,6 +61,7 @@ type session struct {
 	core.Session
 	pid         int
 	hookSession string // the agent CLI's session id the shim reported, or ""
+	machine     string // the machine whose token opened the session; "" for the hub token
 	lastUsed    time.Time
 	// A session is known to be live while a shim watches it (serveWatch), and for watchGrace after an initialize
 	// that announced a watch. Sessions of clients that never watch are not known to be live.
@@ -88,14 +90,21 @@ type binding struct {
 
 // server is the HTTP handler. Its mutable state (sessions and the pid index) sits behind one mutex.
 type server struct {
-	chat    core.Chat
-	mcp     *mcp.Server
-	auth    []byte // "Bearer <token>"; nil refuses every protected request
-	version string
-	reload  func() error
-	clock   core.Clock
-	logf    func(format string, args ...any)
-	start   time.Time
+	chat core.Chat
+	mcp  *mcp.Server
+	// The tokens the daemon accepts (guarded by authMu; replaced as a whole by setTokens): the hub token, which may
+	// do everything, and the SHA-256 of each machine token, which may act only for seats on its machine. With no hub
+	// token every protected request is refused.
+	authMu   sync.RWMutex
+	hub      []byte            // the hub token
+	machines map[string]string // SHA-256 (hex) of a machine token -> the machine's name
+	// loadTokens re-reads the tokens from disk for POST /v1/reload; nil keeps the ones given at start.
+	loadTokens func() (hub string, machines map[string]string, err error)
+	version    string
+	reload     func() error
+	clock      core.Clock
+	logf       func(format string, args ...any)
+	start      time.Time
 
 	mu       sync.Mutex
 	sessions map[string]*session
@@ -111,7 +120,9 @@ type server struct {
 	stopOnce sync.Once
 	bound    map[string]*binding
 	// named is the irc_name call that last set or confirmed each name, for the claim window.
-	named    map[string]namedBy
+	named map[string]namedBy
+	// nameHost remembers which machine a name's seat is on, for hooks that ask with a machine token.
+	nameHost map[string]string
 	bindings core.Bindings // nil: bindings live in memory only
 }
 
@@ -125,14 +136,10 @@ func Handler(chat core.Chat, mcpServer *mcp.Server, token, version string, reloa
 func newServer(chat core.Chat, mcpServer *mcp.Server, token, version string, reload func() error,
 	clock core.Clock, logf func(format string, args ...any),
 ) *server {
-	var auth []byte
-	if token != "" {
-		auth = []byte("Bearer " + token)
-	}
 	return &server{
 		chat:     chat,
 		mcp:      mcpServer,
-		auth:     auth,
+		hub:      []byte(token),
 		version:  version,
 		reload:   reload,
 		clock:    clock,
@@ -142,6 +149,7 @@ func newServer(chat core.Chat, mcpServer *mcp.Server, token, version string, rel
 		pids:     make(map[pidKey]map[string]int),
 		bound:    make(map[string]*binding),
 		named:    make(map[string]namedBy),
+		nameHost: make(map[string]string),
 		stopping: make(chan struct{}),
 	}
 }
@@ -173,18 +181,23 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		_, _ = io.WriteString(w, "ok")
 		return
 	}
-	if s.auth == nil || subtle.ConstantTimeCompare([]byte(r.Header.Get("Authorization")), s.auth) != 1 {
+	machine, ok := s.authorize(r.Header.Get("Authorization"))
+	if !ok {
 		w.WriteHeader(http.StatusUnauthorized)
 		return
 	}
 	switch r.URL.Path {
 	case "/mcp":
-		s.serveMCP(w, r)
+		s.serveMCP(w, r, machine)
 	case "/v1/hook":
 		if method(w, r, http.MethodPost) {
-			s.serveHook(w, r)
+			s.serveHook(w, r, machine)
 		}
 	case "/v1/reload":
+		if machine != "" {
+			w.WriteHeader(http.StatusForbidden) // settings and tokens are the hub's to change
+			return
+		}
 		if method(w, r, http.MethodPost) {
 			s.serveReload(w)
 		}
@@ -194,11 +207,82 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	case "/v1/watch":
 		if method(w, r, http.MethodGet) {
-			s.serveWatch(w, r)
+			s.serveWatch(w, r, machine)
 		}
 	default:
 		w.WriteHeader(http.StatusNotFound)
 	}
+}
+
+// authorize checks an Authorization header. ok is false for anything but a known bearer token. machine is "" for
+// the hub token, which may do everything, and the machine's name for a machine token, which may act only for seats
+// on that machine (enforced where a seat arrives: initialize, the hook, the watch).
+func (s *server) authorize(header string) (machine string, ok bool) {
+	token, found := strings.CutPrefix(header, "Bearer ")
+	if !found || token == "" {
+		return "", false
+	}
+	s.authMu.RLock()
+	defer s.authMu.RUnlock()
+	if len(s.hub) > 0 && subtle.ConstantTimeCompare([]byte(token), s.hub) == 1 {
+		return "", true
+	}
+	// A machine token is looked up by its SHA-256: the daemon never holds the token itself, and a lookup by hash
+	// does not depend on how much of a guess is right.
+	sum := sha256.Sum256([]byte(token))
+	name, known := s.machines[hex.EncodeToString(sum[:])]
+	return name, known
+}
+
+// setTokens replaces every token the daemon accepts. Sessions opened with a machine token that is no longer listed
+// are dropped, so a revoked machine is out at once.
+func (s *server) setTokens(hub string, machines map[string]string) {
+	valid := make(map[string]bool, len(machines))
+	for _, name := range machines {
+		valid[name] = true
+	}
+	s.authMu.Lock()
+	s.hub, s.machines = []byte(hub), machines
+	s.authMu.Unlock()
+	s.mu.Lock()
+	for id, sess := range s.sessions {
+		if sess.machine != "" && !valid[sess.machine] {
+			s.index(sess, -1)
+			delete(s.sessions, id)
+		}
+	}
+	s.mu.Unlock()
+}
+
+// nameOnMachine reports whether the name is bound to a seat on the machine. The answer is remembered, so that a
+// machine's hook does not cost a database read on every event; a name that takes another seat is forgotten
+// (rename) and looked up again.
+func (s *server) nameOnMachine(ctx context.Context, name, machine string) bool {
+	s.mu.Lock()
+	host, known := s.nameHost[name]
+	bindings := s.bindings
+	s.mu.Unlock()
+	if !known {
+		if bindings == nil {
+			return false // nothing to check against: refuse rather than guess
+		}
+		seat, err := bindings.SeatOf(ctx, name)
+		if err != nil {
+			s.logf("error: hook: %v", err)
+			return false
+		}
+		host = identity.HostOf(seat)
+		s.mu.Lock()
+		s.nameHost[name] = host
+		s.mu.Unlock()
+	}
+	return host == machine
+}
+
+// machineSeat reports whether a request made with this token may carry this seat: the hub token any seat, a
+// machine token only a seat on its own machine.
+func machineSeat(machine, seat string) bool {
+	return machine == "" || identity.HostOf(seat) == machine
 }
 
 // method answers 405 and returns false unless the request uses want.
@@ -227,7 +311,7 @@ func readBody(w http.ResponseWriter, r *http.Request) ([]byte, bool) {
 }
 
 // serveMCP is MCP Streamable HTTP with JSON responses only.
-func (s *server) serveMCP(w http.ResponseWriter, r *http.Request) {
+func (s *server) serveMCP(w http.ResponseWriter, r *http.Request, machine string) {
 	if !method(w, r, http.MethodPost) {
 		return
 	}
@@ -238,8 +322,13 @@ func (s *server) serveMCP(w http.ResponseWriter, r *http.Request) {
 	var id string
 	var sess core.Session
 	if isInitialize(body) {
+		// A machine token opens sessions only for seats on its own machine.
+		if !machineSeat(machine, r.Header.Get(headerSeat)) {
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
 		var err error
-		if id, sess, err = s.newSession(r); err != nil {
+		if id, sess, err = s.newSession(r, machine); err != nil {
 			s.logf("error: %v", err)
 			w.WriteHeader(http.StatusInternalServerError)
 			return
@@ -256,6 +345,10 @@ func (s *server) serveMCP(w http.ResponseWriter, r *http.Request) {
 		}
 		s.mu.Lock()
 		known := s.sessions[id]
+		// A session answers only to the token that opened it; to any other it does not exist.
+		if known != nil && known.machine != machine {
+			known = nil
+		}
 		if known != nil {
 			known.lastUsed = s.clock.Now()
 			sess = known.Session
@@ -291,7 +384,7 @@ func (s *server) serveMCP(w http.ResponseWriter, r *http.Request) {
 // knows the session's agent is still there. Nothing is ever sent on it. When the last watch of a session ends (the
 // shim exited, was killed, or lost its connection) the session is dropped at once: its name stops counting as in
 // use and its process id stops resolving hooks. A shim that is still running initializes again on its next call.
-func (s *server) serveWatch(w http.ResponseWriter, r *http.Request) {
+func (s *server) serveWatch(w http.ResponseWriter, r *http.Request, machine string) {
 	id := r.Header.Get(headerSession)
 	if id == "" {
 		w.WriteHeader(http.StatusBadRequest)
@@ -299,6 +392,9 @@ func (s *server) serveWatch(w http.ResponseWriter, r *http.Request) {
 	}
 	s.mu.Lock()
 	sess := s.sessions[id]
+	if sess != nil && sess.machine != machine {
+		sess = nil // not this token's session
+	}
 	if sess != nil {
 		sess.watchers++
 	}
@@ -359,14 +455,14 @@ func toolCalled(body []byte) string {
 }
 
 // newSession creates a session from the shim's headers and returns its id and a copy of what the tools see.
-func (s *server) newSession(r *http.Request) (string, core.Session, error) {
+func (s *server) newSession(r *http.Request, machine string) (string, core.Session, error) {
 	var raw [16]byte
 	if _, err := rand.Read(raw[:]); err != nil {
 		return "", core.Session{}, err
 	}
 	id := hex.EncodeToString(raw[:])
 	now := s.clock.Now()
-	sess := &session{Session: core.Session{Seat: r.Header.Get(headerSeat)}, lastUsed: now}
+	sess := &session{Session: core.Session{Seat: r.Header.Get(headerSeat)}, machine: machine, lastUsed: now}
 	if pid, err := strconv.Atoi(r.Header.Get(headerPid)); err == nil && pid > 0 {
 		sess.pid = pid
 	}
@@ -460,6 +556,9 @@ func (s *server) rename(ctx context.Context, id, name string) {
 	s.index(sess, -1)
 	sess.Name = name
 	s.index(sess, 1)
+	// The name now sits in this session's seat, and the old name may have left its seat.
+	delete(s.nameHost, name)
+	delete(s.nameHost, old)
 	// The shim's own report of its agent CLI session is used only while that session is bound to nobody: a CLI
 	// started from inside another CLI inherits the outer one's session id in its environment, and must not take
 	// the outer agent's hook with it.
@@ -639,7 +738,7 @@ type hookRequest struct {
 }
 
 // serveHook answers whether anything is due for the calling agent. It never fails loudly: errors answer 204.
-func (s *server) serveHook(w http.ResponseWriter, r *http.Request) {
+func (s *server) serveHook(w http.ResponseWriter, r *http.Request, machine string) {
 	body, ok := readBody(w, r)
 	if !ok {
 		return
@@ -649,11 +748,22 @@ func (s *server) serveHook(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
+	// A machine token asks only for agents on its own machine: its seat must be there, and it cannot name an agent
+	// outright (`name` is how an HTTP client on the hub says who it is; from another machine it would be a way to
+	// read anyone's messages).
+	if machine != "" && (req.Name != "" || !machineSeat(machine, req.Seat)) {
+		w.WriteHeader(http.StatusForbidden)
+		return
+	}
 	name, err := s.resolve(r.Context(), req)
 	if err != nil {
 		s.logf("error: hook: %v", err)
 		w.WriteHeader(http.StatusNoContent)
 		return
+	}
+	// However the name was found (a session id, a process id, the seat), it must be one of that machine's.
+	if machine != "" && name != "" && !s.nameOnMachine(r.Context(), name, machine) {
+		name = ""
 	}
 	if name == "" {
 		if req.Event != sessionStart {
@@ -787,11 +897,25 @@ func (s *server) nameForPids(host string, pids []int) string {
 
 // serveReload re-reads the settings file through the reload function.
 func (s *server) serveReload(w http.ResponseWriter) {
-	if err := s.reload(); err != nil {
+	refuse := func(err error) {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		w.WriteHeader(http.StatusBadRequest)
 		_, _ = io.WriteString(w, err.Error())
+	}
+	if err := s.reload(); err != nil {
+		refuse(err)
 		return
+	}
+	// The tokens too: `mairc token rotate|add|revoke` change the files and ask for this reload, so the change is
+	// in force at once and nothing has to restart. Unreadable token files keep the tokens in force.
+	if s.loadTokens != nil {
+		hub, machines, err := s.loadTokens()
+		if err != nil {
+			s.logf("reload failed: tokens: %v", err)
+			refuse(err)
+			return
+		}
+		s.setTokens(hub, machines)
 	}
 	w.WriteHeader(http.StatusNoContent)
 }

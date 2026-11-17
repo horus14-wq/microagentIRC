@@ -164,6 +164,9 @@ type Bindings interface {
 	PruneHookSessions(ctx context.Context, before time.Time) (int, error)
 	// MoveSeat rebinds the name from one seat to another. It changes nothing unless the name is bound to from.
 	MoveSeat(ctx context.Context, name, from, to string) error
+	// SeatOf returns the seat the name is bound to, or "" when the name is unknown or has no seat. The daemon uses
+	// it to check that a hook asking with a machine's token is asking for a name on that machine.
+	SeatOf(ctx context.Context, name string) (string, error)
 }
 
 // Chat is the rule layer (implemented by internal/chat) that tools, the hook endpoint and the daemon call.

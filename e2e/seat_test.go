@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"os/exec"
@@ -313,4 +314,133 @@ func TestAgentsInOneSeatEachGetAndKeepTheirOwnName(t *testing.T) {
 		got, isErr := late.call("irc_name", nil)
 		return !isErr && got == "you are "+first.name
 	})
+}
+
+// mairc runs one `mairc` command in the world's home and returns what it printed and its exit code.
+func (w *world) mairc(args ...string) (string, int) {
+	w.t.Helper()
+	ctx, cancel := context.WithTimeout(w.t.Context(), wait)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, binary, args...)
+	cmd.Env = w.env()
+	out, err := cmd.CombinedOutput()
+	code := 0
+	if exit := (*exec.ExitError)(nil); errors.As(err, &exit) {
+		code = exit.ExitCode()
+	} else if err != nil {
+		w.t.Fatalf("mairc %v: %v", args, err)
+	}
+	return string(out), code
+}
+
+// statusAs asks the daemon's status with a token and returns the HTTP status.
+func (w *world) statusAs(token string) int {
+	w.t.Helper()
+	ctx, cancel := context.WithTimeout(w.t.Context(), wait)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, w.base+"/v1/status", http.NoBody)
+	if err != nil {
+		w.t.Fatal(err)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		w.t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	return resp.StatusCode
+}
+
+// `mairc token rotate` replaces the hub token while everything runs: the old token stops working at once, and an
+// agent whose shim started with it keeps sending, with no restart of the daemon or of the agent.
+func TestTheHubTokenIsRotatedWithoutARestart(t *testing.T) {
+	w := newWorld(t, nil)
+	a := w.newAgent("seat-a")
+	name := a.join()
+	a.ok("irc_send", map[string]any{"text": "before"})
+	old := w.token()
+
+	out, code := w.mairc("token", "rotate")
+	if code != 0 || !strings.Contains(out, "in force: the running daemon has reloaded its tokens") {
+		t.Fatalf("token rotate = %d:\n%s", code, out)
+	}
+	fresh := w.token()
+	if fresh == old || len(fresh) != 64 || strings.Contains(out, fresh) || strings.Contains(out, old) {
+		t.Fatalf("the token was not replaced, or a token was printed:\n%s", out)
+	}
+	if got := w.statusAs(old); got != http.StatusUnauthorized {
+		t.Fatalf("the old token still answers %d", got)
+	}
+	if got := w.statusAs(fresh); got != http.StatusOK {
+		t.Fatalf("the new token answers %d", got)
+	}
+	// The shim was started with the old token: it reads the file again when refused and carries on, same name.
+	a.ok("irc_send", map[string]any{"text": "after"})
+	if got := a.ok("irc_read", map[string]any{"n": 5}); got != "room "+name+": before\nroom "+name+": after" {
+		t.Fatalf("after the rotation irc_read answered %q", got)
+	}
+	// The hook reads the token on every run.
+	w.silent("seat-a", "--client", "plain", "--event", "PostToolUse")
+}
+
+// A machine gets a token of its own: it works for that machine's seats only, and revoking it puts the machine out
+// at once while the hub and its agents carry on.
+func TestAMachineTokenIsAddedConfinedAndRevoked(t *testing.T) {
+	w := newWorld(t, nil)
+	hubAgent := w.newAgent("seat-hub")
+	hubAgent.join()
+
+	out, code := w.mairc("token", "add", "spoke1")
+	lines := strings.Split(strings.TrimSpace(out), "\n")
+	if code != 0 || len(lines) < 2 || len(lines[1]) != 64 {
+		t.Fatalf("token add = %d:\n%s", code, out)
+	}
+	spoke := lines[1]
+	if list, _ := w.mairc("token", "list"); !strings.HasPrefix(list, "spoke1  since ") || strings.Contains(list, spoke) {
+		t.Fatalf("token list:\n%s", list)
+	}
+	initialize := func(token, seat string) int {
+		t.Helper()
+		ctx, cancel := context.WithTimeout(t.Context(), wait)
+		defer cancel()
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, w.base+"/mcp", strings.NewReader(
+			`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Authorization", "Bearer "+token)
+		req.Header.Set("X-Mairc-Seat", seat)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = resp.Body.Close()
+		return resp.StatusCode
+	}
+	if got := initialize(spoke, "@spoke1/tmux:%1"); got != http.StatusOK {
+		t.Fatalf("the machine token for its own seat: %d", got)
+	}
+	if got := initialize(spoke, "@otherbox/tmux:%1"); got != http.StatusForbidden {
+		t.Fatalf("the machine token for another machine's seat: %d, want 403", got)
+	}
+	if got := w.statusAs(spoke); got != http.StatusOK {
+		t.Fatalf("status with the machine token: %d", got)
+	}
+
+	if out, code := w.mairc("token", "revoke", "spoke1"); code != 0 || !strings.Contains(out, "in force") {
+		t.Fatalf("token revoke = %d:\n%s", code, out)
+	}
+	if got := w.statusAs(spoke); got != http.StatusUnauthorized {
+		t.Fatalf("the revoked token answers %d", got)
+	}
+	if out, code := w.mairc("token", "revoke", "spoke1"); code != 1 || !strings.Contains(out, "no token for machine spoke1") {
+		t.Fatalf("a second revoke = %d:\n%s", code, out)
+	}
+	if list, _ := w.mairc("token", "list"); strings.TrimSpace(list) != "no machine tokens" {
+		t.Fatalf("token list after the revoke:\n%s", list)
+	}
+	hubAgent.ok("irc_send", map[string]any{"text": "the hub carries on"})
+	if out, code := w.mairc("token"); code != 2 || !strings.Contains(out, "usage: mairc token") {
+		t.Fatalf("mairc token with no argument = %d:\n%s", code, out)
+	}
 }

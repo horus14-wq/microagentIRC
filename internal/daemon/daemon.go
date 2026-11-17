@@ -124,6 +124,14 @@ func run(ctx context.Context, o Options, logf func(format string, args ...any)) 
 	reload := reloader(o.Paths.Config, service, cur, logf)
 	srv := newServer(service, mcp.New(serverName, o.Version, tools.All(service)), token, o.Version, reload,
 		o.Clock, logf)
+	// The machine tokens beside the hub token, now and on every reload (`mairc token rotate|add|revoke`).
+	srv.loadTokens = func() (string, map[string]string, error) { return loadTokens(o.Paths.Token) }
+	hub, machines, err := srv.loadTokens()
+	if err != nil {
+		_ = ln.Close()
+		return err
+	}
+	srv.setTokens(hub, machines)
 	// Which name each agent CLI session's hook runs for survives a restart: it is in the same database.
 	if err := srv.useBindings(ctx, st); err != nil {
 		_ = ln.Close()
@@ -214,6 +222,28 @@ func (c *current) set(s core.Settings) {
 
 // ensureToken creates the token file, 32 random bytes as 64 hex characters, mode 0600, when it is missing. As
 // with config.json, 0600 is the Unix guarantee; on Windows the file is private because the data directory is per-user.
+// loadTokens reads what the daemon accepts: the hub token, and for each machine token its SHA-256 and the machine
+// it belongs to.
+func loadTokens(tokenPath string) (hub string, machines map[string]string, err error) {
+	if hub, err = config.ReadToken(tokenPath); err != nil {
+		return "", nil, err
+	}
+	if hub == "" {
+		return "", nil, errors.New(tokenPath + " is empty")
+	}
+	listed, err := config.LoadMachines(config.MachinesPath(tokenPath))
+	if err != nil {
+		return "", nil, err
+	}
+	machines = make(map[string]string, len(listed))
+	for name, m := range listed {
+		if config.ValidMachine(name) && len(m.SHA256) == 64 {
+			machines[m.SHA256] = name
+		}
+	}
+	return hub, machines, nil
+}
+
 func ensureToken(path string) error {
 	if _, err := os.Stat(path); err == nil {
 		return nil

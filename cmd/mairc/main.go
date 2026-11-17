@@ -33,7 +33,7 @@ import (
 // version is the release; overridable with -ldflags "-X main.version=...".
 var version = "0.1.0"
 
-const usageLine = "usage: mairc daemon|stdio|hook|config|install|status|doctor|version"
+const usageLine = "usage: mairc daemon|stdio|hook|config|install|status|doctor|token|version"
 
 // controlTimeout bounds `mairc status` and the reload `mairc config set` asks for.
 const controlTimeout = time.Second
@@ -79,6 +79,8 @@ func run(args []string, getenv func(string) string, stdin io.Reader, stdout, std
 		return runStatus(getenv, stdout)
 	case "doctor":
 		return runDoctor(args[1:], getenv, stdin, stdout, stderr)
+	case "token":
+		return runToken(args[1:], getenv, stdout, stderr)
 	default:
 		_, _ = fmt.Fprintln(stderr, usageLine)
 		return 2
@@ -191,6 +193,7 @@ func runStdio(getenv func(string) string, stdin io.Reader, stdout io.Writer) int
 		In:          stdin,
 		Out:         stdout,
 		StartDaemon: start,
+		ReadToken:   func() (string, error) { return config.ReadToken(p.Token) },
 	})
 	return 0
 }
@@ -258,13 +261,19 @@ var errNotRunning = errors.New("daemon not running")
 
 // reload asks the daemon to reread config.json: POST /v1/reload with the token, 1 s.
 func reload(p config.Paths) error {
-	settings, err := config.Load(p.Config)
-	if err != nil {
-		return err
-	}
 	token, err := config.ReadToken(p.Token)
 	if err != nil {
 		return errNotRunning
+	}
+	return reloadWith(p, token)
+}
+
+// reloadWith is reload with the token to present: after `mairc token rotate` has written the new token, the daemon
+// still knows only the old one until this request makes it read the file again.
+func reloadWith(p config.Paths, token string) error {
+	settings, err := config.Load(p.Config)
+	if err != nil {
+		return err
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), controlTimeout)
 	defer cancel()

@@ -27,7 +27,10 @@ type Options struct {
 	In          io.Reader    // the agent's stdout -> our stdin
 	Out         io.Writer    // our stdout -> the agent
 	StartDaemon func() error // starts the daemon detached; called when /healthz does not answer
-	Client      *http.Client // default: 10 s timeout
+	// ReadToken re-reads the token file; called once when the daemon answers 401, so that a changed token is
+	// picked up without restarting the agent CLI. nil: the token given at start is the only one tried.
+	ReadToken func() (string, error)
+	Client    *http.Client // default: 10 s timeout
 }
 
 const (
@@ -127,6 +130,15 @@ func (s *shim) forward(ctx context.Context, line []byte) error {
 	}
 	isInit := probe.Method == "initialize"
 	resp, err := s.post(ctx, line, isInit)
+	if err == nil && resp.StatusCode == http.StatusUnauthorized && s.o.ReadToken != nil {
+		// The token was changed (`mairc token rotate`, or a new machine token was put in place): read the file
+		// again and, if it holds another token, retry once with it. The session is still the daemon's.
+		if token, terr := s.o.ReadToken(); terr == nil && token != "" && token != s.o.Token {
+			_ = resp.Body.Close()
+			s.o.Token = token
+			resp, err = s.post(ctx, line, isInit)
+		}
+	}
 	if err == nil && resp.StatusCode == http.StatusNotFound && len(s.initLine) > 0 {
 		_ = resp.Body.Close()
 		// The daemon restarted and forgot the session: re-initialize, then retry once.

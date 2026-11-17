@@ -352,3 +352,41 @@ func TestTheShimWatchesItsSessionAndKeepsTheSeatItWasGiven(t *testing.T) {
 		}
 	}
 }
+
+// A 401 means the token was changed (`mairc token rotate`): the shim reads the token file again and retries once
+// with what it finds, so the agent keeps working without a restart. With the same token there it does not retry.
+func TestAChangedTokenIsPickedUpOnA401(t *testing.T) {
+	var posts atomic.Int32
+	_, srv := newFakeDaemon(t, func(s reqSeen, _ *http.Request) (int, string, http.Header) {
+		posts.Add(1)
+		if s.auth != "Bearer new-token" {
+			return http.StatusUnauthorized, "", nil
+		}
+		return http.StatusOK, `{"jsonrpc":"2.0","id":9,"result":{"tools":[]}}`, http.Header{"Mcp-Session-Id": {"sess-1"}}
+	})
+	var out bytes.Buffer
+	reads := 0
+	o := Options{
+		BaseURL: srv.URL, Token: "old-token", Out: &out,
+		In:        strings.NewReader(`{"jsonrpc":"2.0","id":9,"method":"tools/list"}` + "\n"),
+		ReadToken: func() (string, error) { reads++; return "new-token", nil },
+	}
+	if err := runShim(o); err != nil {
+		t.Fatal(err)
+	}
+	if lines := outLines(&out); len(lines) != 1 || !strings.Contains(lines[0], `"tools":[]`) || posts.Load() != 2 || reads != 1 {
+		t.Fatalf("out %v, %d posts, %d token reads; want the answer after one retry", outLines(&out), posts.Load(), reads)
+	}
+
+	// The file still holds the refused token: one attempt, and the usual error.
+	posts.Store(0)
+	out.Reset()
+	o.In = strings.NewReader(`{"jsonrpc":"2.0","id":9,"method":"tools/list"}` + "\n")
+	o.ReadToken = func() (string, error) { return "old-token", nil }
+	if err := runShim(o); err != nil {
+		t.Fatal(err)
+	}
+	if lines := outLines(&out); len(lines) != 1 || !strings.Contains(lines[0], "mairc daemon unavailable") || posts.Load() != 1 {
+		t.Fatalf("out %v, %d posts; want the unavailable error after one attempt", outLines(&out), posts.Load())
+	}
+}

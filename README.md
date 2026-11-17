@@ -182,6 +182,7 @@ HTTP MCP client -----------+
 | `mairc config [get <key> \| set <key> <value>]` | List, inspect or change settings |
 | `mairc install [--only cli,...] [--user\|--project] [--dry-run] [--yes] [--uninstall] [--print]` | Set up, preview or remove mairc in every detected CLI |
 | `mairc status` / `mairc version` | Inspect the daemon / print the binary version |
+| `mairc token rotate \| add <machine> \| list \| revoke <machine>` | Replace the hub token, or give another machine a token of its own and take it away again; in force at once, nothing restarts ([security](docs/security.md)) |
 | `mairc doctor [--only cli,...] [--live] [--yes] [--scope user\|project]` | Check the daemon and each CLI's entry (with `--only`, just those CLIs), naming the fix for anything missing; a step mairc cannot see, such as approving Codex's hook in `/hooks`, is named instead of reported ok; `--live` also runs each CLI once to check delivery (it asks first: the run spends your tokens) |
 
 The CLI runs the hook outside the model. Only its output enters context; an idle hook prints nothing.
@@ -208,12 +209,14 @@ Nothing to configure in the usual case. The rules, in short (exact ones in [the 
 ## Agents on several machines
 
 One machine, the hub, runs the daemon. Every other machine forwards the hub's port to its own loopback address and
-uses the hub's token, so its `mairc stdio` and `mairc hook` reach the hub as if it were local. The daemon itself
+uses a token of its own, so its `mairc stdio` and `mairc hook` reach the hub as if it were local. The daemon itself
 listens on loopback only; the private network (an SSH connection, a VPN, a tailnet) carries the forward.
 
-1. **Hub:** install as usual. Its token is the file `token` in its data directory.
-2. **Each other machine:** install as usual, copy the hub's `token` file into its own data directory (mode `0600`),
-   and keep a forward running **before any agent starts**, for example `ssh -N -L 4747:127.0.0.1:4747 <hub>`.
+1. **Hub:** install as usual, then make a token for each other machine: `mairc token add <its-host-name>`. That
+   token works only for agents on that machine, and `mairc token revoke <its-host-name>` takes it away at once.
+2. **Each other machine:** install as usual, put its token into the file `token` in its own data directory (mode
+   `0600`), and keep a forward running **before any agent starts**, for example
+   `ssh -N -L 4747:127.0.0.1:4747 <hub>`.
 
 **With Tailscale:** the hub and the other machines only need to be on the same tailnet. Use the hub's tailnet name
 in the forward, for example `ssh -N -L 4747:127.0.0.1:4747 <user>@<hub-tailnet-name>`. Nothing is exposed outside
@@ -232,8 +235,8 @@ Know before you rely on it (each checked with a real run on two data directories
   `mairc daemon unavailable`.
 - `mairc status` and the daemon line of `mairc doctor` report the hub. `mairc config set` changes the local file
   only: the settings in force are the hub's, so change them on the hub.
-- If the hub's token changes, copy it again. A wrong token looks like no daemon: a silent hook, and
-  `mairc status` says `not running`.
+- A wrong token looks like no daemon: a silent hook, and `mairc status` says `not running`.
+- What each machine can and cannot do, and how to cut one off: [docs/security.md](docs/security.md).
 
 Step-by-step setup for the hub and for Linux, macOS and Windows machines, a check that it works, and what to do
 when something is wrong: [docs/multi-machine.md](docs/multi-machine.md). Listening on a private network address

@@ -538,3 +538,12 @@ func (s *Store) PrivateSince(ctx context.Context, sender string, since time.Time
 	}
 	return out, rows.Err()
 }
+
+// SeatOf returns the seat the name is bound to, or "" (core.Bindings).
+func (s *Store) SeatOf(ctx context.Context, name string) (string, error) {
+	a, ok, err := s.Agent(ctx, name)
+	if err != nil || !ok {
+		return "", err
+	}
+	return a.Seat, nil
+}
