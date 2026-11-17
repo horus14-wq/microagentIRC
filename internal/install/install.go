@@ -100,37 +100,29 @@ func Run(o Options) int {
 		}
 		o.Binary = b
 	}
-	var files []*target
+	// Each CLI is read, checked and edited in memory before anything is written. A CLI with a file that cannot be
+	// read, parsed or merged is skipped whole, with one line naming the file; the others go ahead.
+	var ready, failed []*cliRun
 	for _, c := range selected {
 		specs := c.files(scope, o)
 		if len(specs) == 0 {
 			_, _ = fmt.Fprintf(out, "%s: no %s-scope configuration, skipped\n", c.name, scope)
+			continue
 		}
+		run := &cliRun{name: c.name}
 		for _, f := range specs {
-			files = append(files, &target{path: f.path, spec: f})
+			run.files = append(run.files, &target{path: f.path, spec: f})
 		}
-	}
-	// Read, check and edit every file in memory before writing any: one unparsable file leaves all untouched.
-	for _, f := range files {
-		if err := f.load(); err != nil {
-			if errors.Is(err, errNotJSON) {
-				_, _ = fmt.Fprintf(out, "cannot parse %s: fix it or use --print\n", f.path)
-			} else {
-				_, _ = fmt.Fprintf(out, "cannot read %s\n", f.path)
-			}
-			return 1
+		if problem := run.prepare(o.Binary, o.Uninstall); problem != "" {
+			_, _ = fmt.Fprintf(out, "%s: skipped, %s\n", c.name, problem)
+			failed = append(failed, run)
+			continue
 		}
+		ready = append(ready, run)
 	}
 	var changed []*target
-	for _, f := range files {
-		edited, problem := f.apply(o.Binary, o.Uninstall)
-		if problem != "" {
-			_, _ = fmt.Fprintln(out, problem)
-			return 1
-		}
-		if edited {
-			changed = append(changed, f)
-		}
+	for _, run := range ready {
+		changed = append(changed, run.changed...)
 	}
 	if o.DryRun {
 		for _, f := range changed {
@@ -141,21 +133,95 @@ func Run(o Options) int {
 		return 1
 	}
 	if !o.DryRun {
-		for _, f := range changed {
-			if err := f.store(); err != nil {
-				_, _ = fmt.Fprintf(out, "cannot write %s\n", f.path)
-				return 1
+		var stored []*cliRun
+		for _, run := range ready {
+			if f, err := run.store(out, o.Uninstall); err != nil {
+				_, _ = fmt.Fprintf(out, "%s: cannot write %s\n", run.name, f.path)
+				failed = append(failed, run)
+				continue
 			}
-			_, _ = fmt.Fprintf(out, "updated %s\n", f.path)
-			if f.spec.notice != "" && !o.Uninstall {
-				_, _ = fmt.Fprintln(out, f.spec.notice)
-			}
+			stored = append(stored, run)
 		}
+		ready = stored
+	}
+	if len(failed) > 0 {
+		_, _ = fmt.Fprintln(out, summary(ready, failed, o))
+		return 1
 	}
 	if len(changed) == 0 && !o.Uninstall {
 		_, _ = fmt.Fprintln(out, "already installed")
 	}
 	return 0
+}
+
+// A cliRun is one CLI's files in one run: all of them are written, or none.
+type cliRun struct {
+	name    string
+	files   []*target
+	changed []*target
+}
+
+// prepare loads and edits every file of the CLI in memory. problem is the one-line reason the CLI is skipped.
+func (r *cliRun) prepare(binary string, uninstall bool) (problem string) {
+	for _, f := range r.files {
+		if err := f.load(); err != nil {
+			if errors.Is(err, errNotJSON) {
+				return fmt.Sprintf("cannot parse %s: fix it or use --print", f.path)
+			}
+			return "cannot read " + f.path
+		}
+	}
+	for _, f := range r.files {
+		edited, problem := f.apply(binary, uninstall)
+		if problem != "" {
+			return problem
+		}
+		if edited {
+			r.changed = append(r.changed, f)
+		}
+	}
+	return ""
+}
+
+// store writes the CLI's changed files and reports each; it stops at the first file it cannot write.
+func (r *cliRun) store(out io.Writer, uninstall bool) (*target, error) {
+	for _, f := range r.changed {
+		if err := f.store(); err != nil {
+			return f, err
+		}
+		_, _ = fmt.Fprintf(out, "updated %s\n", f.path)
+		if f.spec.notice != "" && !uninstall {
+			_, _ = fmt.Fprintln(out, f.spec.notice)
+		}
+	}
+	return nil, nil
+}
+
+// summary is the closing line of a run in which some CLI was skipped.
+func summary(done, failed []*cliRun, o Options) string {
+	verb := map[[2]bool]string{
+		{false, false}: "set up", {true, false}: "removed from",
+		{false, true}: "would set up", {true, true}: "would remove from",
+	}[[2]bool{o.Uninstall, o.DryRun}]
+	names := func(runs []*cliRun) string {
+		if len(runs) == 0 {
+			return "none"
+		}
+		list := make([]string, 0, len(runs))
+		for _, r := range runs {
+			list = append(list, r.name)
+		}
+		return strings.Join(list, ", ")
+	}
+	sorted := make([]*cliRun, 0, len(failed))
+	for _, c := range clis() {
+		for _, r := range failed {
+			if r.name == c.name {
+				sorted = append(sorted, r)
+			}
+		}
+	}
+	return fmt.Sprintf("summary: %s %s; skipped %s", verb, names(done), names(sorted))
 }
 
 // selectCLIs returns the CLIs to set up: those named by --only (an unknown name is a usage error), else every

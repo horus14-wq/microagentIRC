@@ -271,7 +271,7 @@ func TestInvalidJSONIsReportedAndNothingIsTouched(t *testing.T) {
 		set := filepath.Join(home, ".claude", "settings.json")
 		write(t, set, bad, 0o600)
 		code, out := run(Options{Binary: testBinary, Home: home})
-		if code != 1 || out != "cannot parse "+set+": fix it or use --print\n" {
+		if code != 1 || out != "claude: skipped, cannot parse "+set+": fix it or use --print\nsummary: set up none; skipped claude\n" {
 			t.Fatalf("%q: Run = %d, out %q", bad, code, out)
 		}
 		if got := string(read(t, set)); got != bad {
@@ -323,5 +323,58 @@ func TestUsageErrorsReturnTwo(t *testing.T) {
 				t.Fatalf("Run = %d, out %q", code, out)
 			}
 		})
+	}
+}
+
+// mairc-nlr (1) and (4): one CLI's unusable file — a broken opencode.json, a hand-written [mcp_servers.mairc] in
+// Grok's config.toml — skips that CLI with one line naming the file; every other CLI is still set up, a summary
+// closes the run, and the exit code is 1.
+func TestOneBadFileSkipsOnlyItsCLI(t *testing.T) {
+	home := t.TempDir()
+	openCode := filepath.Join(home, ".config", "opencode", "opencode.json")
+	grokTOML := filepath.Join(home, ".grok", "config.toml")
+	const broken = "{ \"mcp\": {\n"
+	const handWritten = "model = \"grok-4\"\n\n[mcp_servers.mairc]\ncommand = \"/usr/local/bin/mairc\"\nargs = [\"stdio\"]\n"
+	write(t, openCode, broken, 0o600)
+	write(t, grokTOML, handWritten, 0o600)
+	all := []string{"claude", "codex", "grok", "devin", "opencode", "prime-agent", "agy"}
+	code, out := runRaw(Options{Binary: testBinary, Home: home, Only: all})
+	for _, want := range []string{
+		"opencode: skipped, cannot parse " + openCode + ": fix it or use --print\n",
+		"grok: skipped, " + grokTOML + " already defines [mcp_servers.mairc] outside mairc's block: remove it or use --print\n",
+		"updated " + filepath.Join(home, ".claude.json") + "\n",
+		"updated " + filepath.Join(home, ".codex", "config.toml") + "\n",
+		"updated " + filepath.Join(home, ".config", "devin", "mcp_config.json") + "\n",
+		"updated " + filepath.Join(home, ".prime", "agent", "settings.json") + "\n",
+		"updated " + filepath.Join(home, ".gemini", "config", "mcp_config.json") + "\n",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("output lacks %q:\n%s", want, out)
+		}
+	}
+	if code != 1 || !strings.HasSuffix(out, "summary: set up claude, codex, devin, prime-agent, agy; skipped grok, opencode\n") {
+		t.Fatalf("Run = %d, out:\n%s", code, out)
+	}
+	if got := string(read(t, openCode)); got != broken {
+		t.Fatalf("the broken file was changed: %q", got)
+	}
+	if got := string(read(t, grokTOML)); got != handWritten {
+		t.Fatalf("the hand-written grok config was changed: %q", got)
+	}
+	// The skipped CLI's other file (OpenCode's AGENTS.md) is not written either: a CLI is set up whole or not at all.
+	if _, err := os.Stat(filepath.Join(home, ".config", "opencode", "AGENTS.md")); err == nil {
+		t.Fatal("a skipped CLI got part of its setup")
+	}
+	// The same refusal for Codex's TOML, with Claude Code still set up.
+	other := t.TempDir()
+	codexTOML := filepath.Join(other, ".codex", "config.toml")
+	write(t, codexTOML, handWritten, 0o600)
+	code, out = runRaw(Options{Binary: testBinary, Home: other, Only: []string{"codex", "claude"}})
+	want := "codex: skipped, " + codexTOML + " already defines [mcp_servers.mairc] outside mairc's block: remove it or use --print\n" +
+		"updated " + filepath.Join(other, ".claude.json") + "\n" +
+		"updated " + filepath.Join(other, ".claude", "settings.json") + "\n" +
+		"summary: set up claude; skipped codex\n"
+	if code != 1 || out != want || string(read(t, codexTOML)) != handWritten {
+		t.Fatalf("codex: Run = %d, out:\n%s", code, out)
 	}
 }
