@@ -1,3 +1,5 @@
+// Package config holds the mairc settings: paths, load, save and `mairc config`.
+//
 // Per-OS data directory rules. One pure function holds all three, so the tests exercise every rule on any host: the
 // OS name and both directory lookups are parameters. `os.UserConfigDir` is the portable lookup (on macOS it is
 // `~/Library/Application Support`); Windows wants `%LOCALAPPDATA%`, which `os.UserConfigDir` does not return (it is
