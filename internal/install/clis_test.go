@@ -2,6 +2,7 @@ package install
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -23,8 +24,15 @@ func lookPathOf(found ...string) func(string) (string, error) {
 
 func runRaw(o Options) (int, string) {
 	var out bytes.Buffer
+	o.Binary = nativeTestBinary(o.Binary) // an absolute path on this OS (C:\opt\...\mairc.exe on Windows)
 	o.Out = &out
 	return Run(o), out.String()
+}
+
+// jbin is the native test binary as it appears inside a JSON string (backslashes escaped on Windows).
+func jbin() string {
+	quoted, _ := json.Marshal(nativeTestBinary(testBinary))
+	return strings.Trim(string(quoted), `"`)
 }
 
 func TestDetectionSetsUpWhatIsPresentAndSkipsTheRest(t *testing.T) {
@@ -90,7 +98,7 @@ func TestDryRunShowsTheDiffAndWritesNothing(t *testing.T) {
 	for _, want := range []string{
 		"would update " + mcp + "\n",
 		`+     "mairc": {` + "\n",
-		`+       "command": "` + testBinary + `",` + "\n",
+		`+       "command": "` + jbin() + `",` + "\n",
 		"would update " + filepath.Join(home, ".claude", "settings.json") + "\n",
 	} {
 		if !strings.Contains(out, want) {
@@ -200,7 +208,7 @@ func TestEveryRowMergesIdempotentlyAndUninstallsExactly(t *testing.T) {
 				}
 				for _, f := range files {
 					got := string(read(t, f.path))
-					mark := testBinary // instruction blocks name no binary: their marker is the evidence
+					mark := jbin() // block files: their marker is the evidence (below)
 					if f.block != nil {
 						mark = f.block.begin
 					}
@@ -227,8 +235,8 @@ func TestEveryRowMergesIdempotentlyAndUninstallsExactly(t *testing.T) {
 
 // The MCP entry each new row writes into a fresh file, exactly.
 func TestNewRowsWriteTheirDocumentedEntry(t *testing.T) {
-	stdio := "{\n  \"mcpServers\": {\n    \"mairc\": {\n      \"command\": \"" + testBinary + "\",\n      \"args\": [\n        \"stdio\"\n      ]\n    }\n  }\n}\n"
-	typed := "{\n  \"mcpServers\": {\n    \"mairc\": {\n      \"type\": \"stdio\",\n      \"command\": \"" + testBinary + "\",\n      \"args\": [\n        \"stdio\"\n      ]\n    }\n  }\n}\n"
+	stdio := "{\n  \"mcpServers\": {\n    \"mairc\": {\n      \"command\": \"" + jbin() + "\",\n      \"args\": [\n        \"stdio\"\n      ]\n    }\n  }\n}\n"
+	typed := "{\n  \"mcpServers\": {\n    \"mairc\": {\n      \"type\": \"stdio\",\n      \"command\": \"" + jbin() + "\",\n      \"args\": [\n        \"stdio\"\n      ]\n    }\n  }\n}\n"
 	cases := []struct {
 		cli, goos, rel, want string
 	}{
@@ -301,7 +309,7 @@ func TestBlockWriter(t *testing.T) {
 // The TOML rows write the block, exactly, into a fresh file.
 func TestTOMLRowsWriteTheBlock(t *testing.T) {
 	begin, end := tomlMarkers()
-	want := begin + "\n" + tomlMCPServer(testBinary) + end + "\n"
+	want := begin + "\n" + tomlMCPServer(nativeTestBinary(testBinary)) + end + "\n"
 	for _, tc := range []struct{ cli, rel string }{
 		{"codex", filepath.Join(".codex", "config.toml")},
 		{"grok", filepath.Join(".grok", "config.toml")},
@@ -362,7 +370,7 @@ func TestOpenCodeRow(t *testing.T) {
 	if code, out := runRaw(Options{Binary: testBinary, Home: home, Only: []string{"opencode"}}); code != 0 {
 		t.Fatalf("install = %d, %q", code, out)
 	}
-	want := "{\n  \"mcp\": {\n    \"mairc\": {\n      \"type\": \"local\",\n      \"command\": [\n        \"" + testBinary +
+	want := "{\n  \"mcp\": {\n    \"mairc\": {\n      \"type\": \"local\",\n      \"command\": [\n        \"" + jbin() +
 		"\",\n        \"stdio\"\n      ]\n    }\n  }\n}\n"
 	if got := string(read(t, filepath.Join(home, ".config", "opencode", "opencode.json"))); got != want {
 		t.Fatalf("opencode.json:\n%s", got)
@@ -385,7 +393,7 @@ func TestAntigravityRow(t *testing.T) {
 	if code, out := runRaw(Options{Binary: testBinary, Home: home, Only: []string{"agy"}}); code != 0 {
 		t.Fatalf("install = %d, %q", code, out)
 	}
-	want := "{\n  \"mcpServers\": {\n    \"mairc\": {\n      \"command\": \"" + testBinary +
+	want := "{\n  \"mcpServers\": {\n    \"mairc\": {\n      \"command\": \"" + jbin() +
 		"\",\n      \"args\": [\n        \"stdio\"\n      ]\n    }\n  }\n}\n"
 	if got := string(read(t, filepath.Join(home, ".gemini", "config", "mcp_config.json"))); got != want {
 		t.Fatalf("mcp_config.json:\n%s", got)
@@ -451,7 +459,7 @@ func TestSymlinkedConfigStaysALink(t *testing.T) {
 	if info, err := os.Lstat(link); err != nil || info.Mode()&os.ModeSymlink == 0 {
 		t.Fatalf("the link was replaced: %v %v", info, err)
 	}
-	if got := string(read(t, target)); !strings.Contains(got, testBinary) || !strings.HasPrefix(got, "{\n  \"keep\": 1,\n") {
+	if got := string(read(t, target)); !strings.Contains(got, jbin()) || !strings.HasPrefix(got, "{\n  \"keep\": 1,\n") {
 		t.Fatalf("target:\n%s", got)
 	}
 	if got := string(read(t, target+".mairc.bak")); got != "{\n  \"keep\": 1\n}\n" {

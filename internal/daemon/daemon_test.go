@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"regexp"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -94,8 +95,13 @@ func TestRun(t *testing.T) {
 	if !regexp.MustCompile(`^[0-9a-f]{64}$`).MatchString(token) {
 		t.Fatalf("token %q", token)
 	}
+	// 0600 where Unix permission bits exist; Windows has none and Go reports a writable file as 0666.
+	private := os.FileMode(0o600)
+	if runtime.GOOS == "windows" {
+		private = 0o666
+	}
 	for _, p := range []string{paths.Token, paths.PID} {
-		if fi, err := os.Stat(p); err != nil || fi.Mode().Perm() != 0o600 {
+		if fi, err := os.Stat(p); err != nil || fi.Mode().Perm() != private {
 			t.Fatalf("%s: %v %v", p, fi, err)
 		}
 	}
