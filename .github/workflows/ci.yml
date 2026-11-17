@@ -10,11 +10,16 @@ permissions:
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   check:
-    runs-on: ubuntu-latest
+    name: check (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # v6.0.0
@@ -22,12 +27,55 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
-      - name: Install pinned tools
+      - name: Install Task
+        shell: bash
+        run: |
+          go install github.com/go-task/task/v3/cmd/task@v3.54.0
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+      - name: Install Linux quality tools
+        if: runner.os == 'Linux'
+        shell: bash
         run: |
           go install mvdan.cc/gofumpt@v0.12.0
           go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.15.0
-          go install github.com/go-task/task/v3/cmd/task@v3.54.0
           go install golang.org/x/vuln/cmd/govulncheck@v1.9.0
-          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
-      - run: task check
+      - run: task fmt:check
+        if: runner.os == 'Linux'
+      - run: task vet
+      - run: task lint
+        if: runner.os == 'Linux'
+      - run: task test
       - run: task vuln
+        if: runner.os == 'Linux'
+
+  build:
+    name: build (${{ matrix.goos }}/${{ matrix.goarch }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {goos: linux, goarch: amd64, suffix: ''}
+          - {goos: linux, goarch: arm64, suffix: ''}
+          - {goos: darwin, goarch: arm64, suffix: ''}
+          - {goos: darwin, goarch: amd64, suffix: ''}
+          - {goos: windows, goarch: amd64, suffix: '.exe'}
+    steps:
+      - uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # v6.0.0
+      - uses: actions/setup-go@44694675825211faa026b3c33043df3e48a5fa00 # v6.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Build static binary
+        env:
+          CGO_ENABLED: '0'
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: go build -trimpath -ldflags "-s -w" -o dist/mairc-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.suffix }} ./cmd/mairc
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: mairc-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: dist/mairc-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.suffix }}
+          if-no-files-found: error
+          retention-days: 7

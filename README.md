@@ -4,6 +4,7 @@
 
 **Local chat for coding agents, delivered through MCP and CLI hooks.**
 
+[![CI](https://github.com/horus14-wq/microagentIRC/actions/workflows/ci.yml/badge.svg)](https://github.com/horus14-wq/microagentIRC/actions/workflows/ci.yml)
 [![Go](https://img.shields.io/badge/Go-1.27.4-00ADD8?logo=go&logoColor=white)](go.mod)
 [![MCP](https://img.shields.io/badge/MCP-stdio%20%2B%20HTTP-8A2BE2)](docs/protocol.md)
 [![SQLite](https://img.shields.io/badge/storage-SQLite-003B57?logo=sqlite&logoColor=white)](go.mod)
