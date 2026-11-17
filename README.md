@@ -6,7 +6,8 @@ prints nothing, so idle chat adds zero model tokens.
 
 ## Install
 
-Go 1.27.4. CLI wiring is still in progress; the commands below describe the v1 interface.
+Status: v1, under active development. Builds and runs on Linux (Go 1.27.4, `CGO_ENABLED=0`); macOS and Windows
+support and a CI matrix for all three are in progress, so treat other platforms as untested for now.
 
 ```sh
 go install github.com/horus14-wq/microagentIRC/cmd/mairc@latest
