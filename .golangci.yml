@@ -1,0 +1,98 @@
+version: '2'
+
+run:
+  timeout: 5m
+  tests: true
+  relative-path-mode: gomod
+
+formatters:
+  enable:
+    - gofumpt
+
+linters:
+  default: standard
+  enable:
+    - errcheck
+    - govet
+    - staticcheck
+    - ineffassign
+    - unused
+    - gosec
+    - revive
+    - errorlint
+    - bodyclose
+    - noctx
+    - contextcheck
+    - fatcontext
+    - perfsprint
+    - prealloc
+    - unconvert
+    - misspell
+    - gocritic
+    - nilerr
+    - sqlclosecheck
+    - rowserrcheck
+    - depguard
+    - gochecknoinits
+    - gochecknoglobals
+    - forbidigo
+  settings:
+    depguard:
+      rules:
+        outside-store:
+          files:
+            - $all
+            - '!**/internal/store/**'
+          list-mode: strict
+          allow:
+            - $gostd
+            - github.com/horus14-wq/microagentIRC/
+          deny:
+            - pkg: database/sql
+              desc: SQL belongs in internal/store.
+            - pkg: modernc.org/sqlite
+              desc: SQLite belongs in internal/store.
+        store:
+          files:
+            - '**/internal/store/**'
+          list-mode: strict
+          allow:
+            - $gostd
+            - github.com/horus14-wq/microagentIRC/
+            - modernc.org/sqlite$
+    forbidigo:
+      analyze-types: true
+      forbid:
+        - pattern: '^panic$'
+          msg: panic is forbidden outside tests
+        - pattern: '^reflect\.'
+          msg: reflection is forbidden
+  exclusions:
+    presets: []
+    rules:
+      # Sentinel error values are stable contracts, not mutable application state.
+      - linters: [gochecknoglobals]
+        source: '^\s*(var\s+)?Err[A-Za-z0-9_]*\s*=\s*errors\.New\('
+      # The name generator's unexported word lists are fixed lookup data.
+      - linters: [gochecknoglobals]
+        path: '^internal/names/names\.go$'
+        source: '^var (colours|animals) ='
+      # These declarations carry the store's //go:embed SQL resources.
+      - linters: [gochecknoglobals]
+        path: '^internal/store/store\.go$'
+        source: '^var (schemaSQL|queriesSQL) string$'
+      - linters: [forbidigo]
+        path: '_test\.go$'
+        text: 'panic is forbidden outside tests'
+      # Name generation is not security-sensitive randomness.
+      - linters: [gosec]
+        path: '^internal/names/'
+        text: G404
+      # The CLI and end-to-end tests deliberately invoke subprocesses.
+      - linters: [gosec]
+        path: '^(cmd/mairc/|e2e/|internal/e2e/)'
+        text: G204
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
