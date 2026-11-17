@@ -1,31 +1,362 @@
 // Command mairc is microagentIRC: a tiny chat system for coding agents, served as an MCP server.
-// This file only dispatches subcommands; plan.md §2 and the beads in .beads/ say what each one does.
+// This file only parses the command line and calls the packages; it adds no logic of its own beyond flags,
+// environment, signals and starting the daemon in the background.
 package main
 
 import (
+	"context"
+	"encoding/json"
+	"errors"
+	"flag"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
+	"os/exec"
+	"os/signal"
+	"path/filepath"
+	"strings"
+	"syscall"
+	"time"
+
+	"github.com/horus14-wq/microagentIRC/internal/config"
+	"github.com/horus14-wq/microagentIRC/internal/daemon"
+	"github.com/horus14-wq/microagentIRC/internal/hook"
+	"github.com/horus14-wq/microagentIRC/internal/identity"
+	"github.com/horus14-wq/microagentIRC/internal/install"
+	"github.com/horus14-wq/microagentIRC/internal/shim"
 )
 
-const version = "0.0.0-dev"
+// version is the release; overridable with -ldflags "-X main.version=...".
+var version = "0.1.0"
+
+const usageLine = "usage: mairc daemon|stdio|hook|config|install|status|version"
+
+// controlTimeout bounds `mairc status` and the reload `mairc config set` asks for.
+const controlTimeout = time.Second
 
 func main() {
-	if len(os.Args) < 2 {
-		usage()
-		os.Exit(2)
+	os.Exit(run(os.Args[1:], os.Getenv, os.Stdin, os.Stdout, os.Stderr))
+}
+
+// run dispatches one command line and returns the exit code. The hook is matched first and does nothing else
+// before its own work: it runs after every tool call of every agent.
+func run(args []string, getenv func(string) string, stdin io.Reader, stdout, stderr io.Writer) int {
+	if len(args) == 0 {
+		_, _ = fmt.Fprintln(stderr, usageLine)
+		return 2
 	}
-	switch os.Args[1] {
+	switch args[0] {
+	case "hook":
+		return runHook(args[1:], getenv, stdin, stdout)
 	case "version":
-		fmt.Println(version)
-	case "daemon", "stdio", "hook", "config", "install", "status":
-		fmt.Fprintf(os.Stderr, "mairc %s: not built yet (see the beads in .beads/)\n", os.Args[1])
-		os.Exit(1)
+		if !noArgs("version", args[1:], stderr) {
+			return 2
+		}
+		_, _ = fmt.Fprintln(stdout, version)
+		return 0
+	case "daemon":
+		if !noArgs("daemon", args[1:], stderr) {
+			return 2
+		}
+		return runDaemon(getenv, stderr)
+	case "stdio":
+		if !noArgs("stdio", args[1:], stderr) {
+			return 2
+		}
+		return runStdio(getenv, stdin, stdout)
+	case "config":
+		return runConfig(args[1:], getenv, stdout, stderr)
+	case "install":
+		return runInstall(args[1:], stdout, stderr)
+	case "status":
+		if !noArgs("status", args[1:], stderr) {
+			return 2
+		}
+		return runStatus(getenv, stdout)
 	default:
-		usage()
-		os.Exit(2)
+		_, _ = fmt.Fprintln(stderr, usageLine)
+		return 2
 	}
 }
 
-func usage() {
-	fmt.Fprintln(os.Stderr, "usage: mairc daemon|stdio|hook|config|install|status|version")
+// noArgs parses a subcommand that takes no flags or arguments, printing its usage on anything else.
+func noArgs(name string, args []string, stderr io.Writer) bool {
+	fs := flag.NewFlagSet(name, flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	if fs.Parse(args) != nil || fs.NArg() > 0 {
+		_, _ = fmt.Fprintf(stderr, "usage: mairc %s\n", name)
+		return false
+	}
+	return true
+}
+
+// runHook is the hot path: resolve paths, read config.json and the token, compute seat and ancestors, call
+// hook.Run. Any problem, including a bad flag, prints nothing on either stream and exits 0.
+func runHook(args []string, getenv func(string) string, stdin io.Reader, stdout io.Writer) int {
+	fs := flag.NewFlagSet("hook", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	client := fs.String("client", "plain", "")
+	event := fs.String("event", "", "")
+	name := fs.String("name", "", "")
+	if fs.Parse(args) != nil || fs.NArg() > 0 || (*client != "claude" && *client != "plain") {
+		return 0
+	}
+	if *name == "" {
+		*name = getenv("MAIRC_NAME")
+	}
+	p, err := config.ResolvePaths(getenv)
+	if err != nil {
+		return 0
+	}
+	settings, err := config.Load(p.Config)
+	if err != nil {
+		return 0
+	}
+	token, err := config.ReadToken(p.Token)
+	if err != nil {
+		return 0
+	}
+	var in io.Reader
+	if !isTerminal(stdin) {
+		in = stdin
+	}
+	return hook.Run(context.Background(), hook.Options{
+		BaseURL: "http://" + settings.Listen,
+		Token:   token,
+		Timeout: time.Duration(settings.HookTimeoutMS) * time.Millisecond,
+		Client:  *client,
+		Event:   *event,
+		Name:    *name,
+		Seat:    identity.Seat(getenv, identity.ControllingTTY, os.Getwd),
+		PIDs:    identity.Ancestors(os.Getpid(), 8, identity.ParentOf),
+		Stdin:   in,
+		Stdout:  stdout,
+	})
+}
+
+// isTerminal reports whether r is a terminal; the hook never reads one.
+func isTerminal(r io.Reader) bool {
+	f, ok := r.(*os.File)
+	if !ok || f == nil {
+		return r == nil
+	}
+	info, err := f.Stat()
+	return err != nil || info.Mode()&os.ModeCharDevice != 0
+}
+
+func runDaemon(getenv func(string) string, stderr io.Writer) int {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	p, err := config.ResolvePaths(getenv)
+	if err == nil {
+		err = daemon.Run(ctx, daemon.Options{Paths: p, Version: version})
+	}
+	if err != nil {
+		_, _ = fmt.Fprintln(stderr, err)
+		return 1
+	}
+	return 0
+}
+
+// runStdio runs the shim. On a first run the token does not exist until the daemon has created it, and the shim
+// takes the token as it starts, so a missing token starts the daemon here and waits briefly for the file.
+func runStdio(getenv func(string) string, stdin io.Reader, stdout io.Writer) int {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	p, err := config.ResolvePaths(getenv)
+	if err != nil {
+		return 0
+	}
+	settings, _ := config.Load(p.Config)
+	start := func() error { return startDaemon(p) }
+	token, err := config.ReadToken(p.Token)
+	if err != nil {
+		_ = start()
+		token = waitForToken(ctx, p.Token)
+	}
+	_ = shim.Run(ctx, shim.Options{
+		BaseURL:     "http://" + settings.Listen,
+		Token:       token,
+		Seat:        identity.Seat(getenv, identity.ControllingTTY, os.Getwd),
+		AgentPID:    os.Getppid(),
+		In:          stdin,
+		Out:         stdout,
+		StartDaemon: start,
+	})
+	return 0
+}
+
+// waitForToken polls for the token file for up to 3 s (the shim's own wait for /healthz) and returns "" if it
+// never appears; the shim then answers each request with its daemon-unavailable error.
+func waitForToken(ctx context.Context, path string) string {
+	for waited := time.Duration(0); waited < 3*time.Second; waited += 50 * time.Millisecond {
+		if token, err := config.ReadToken(path); err == nil {
+			return token
+		}
+		timer := time.NewTimer(50 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ""
+		case <-timer.C:
+		}
+	}
+	return ""
+}
+
+// startDaemon starts `<this binary> daemon` detached: its own session, stdin from /dev/null, stdout and stderr
+// appended to the log, the environment inherited. It does not wait for it. A second daemon started at the same
+// time finds the address held by a healthy daemon and exits 0.
+func startDaemon(p config.Paths) error {
+	exe, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	if err := config.EnsureHome(p); err != nil {
+		return err
+	}
+	logFile, err := os.OpenFile(p.Log, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o600)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = logFile.Close() }()
+	devNull, err := os.Open(os.DevNull)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = devNull.Close() }()
+	cmd := exec.Command(exe, "daemon") // #nosec G204 -- this binary, re-executed
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = devNull, logFile, logFile
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	return cmd.Process.Release()
+}
+
+func runConfig(args []string, getenv func(string) string, stdout, stderr io.Writer) int {
+	p, err := config.ResolvePaths(getenv)
+	if err != nil {
+		_, _ = fmt.Fprintln(stderr, err)
+		return 1
+	}
+	return config.Run(args, p, stdout, stderr, func() error { return reload(p) })
+}
+
+// errNotRunning is the reload error when the daemon does not answer.
+var errNotRunning = errors.New("daemon not running")
+
+// reload asks the daemon to reread config.json: POST /v1/reload with the token, 1 s.
+func reload(p config.Paths) error {
+	settings, err := config.Load(p.Config)
+	if err != nil {
+		return err
+	}
+	token, err := config.ReadToken(p.Token)
+	if err != nil {
+		return errNotRunning
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), controlTimeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://"+settings.Listen+"/v1/reload", nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err := controlClient().Do(req)
+	if err != nil {
+		return errNotRunning
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode == http.StatusNoContent || resp.StatusCode == http.StatusOK {
+		return nil
+	}
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+	if msg := strings.TrimSpace(string(body)); msg != "" {
+		return errors.New(msg)
+	}
+	return fmt.Errorf("daemon answered %d", resp.StatusCode)
+}
+
+func controlClient() *http.Client {
+	return &http.Client{Transport: &http.Transport{Proxy: nil, DisableKeepAlives: true}}
+}
+
+func runInstall(args []string, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("install", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	scope := fs.String("scope", "user", "")
+	printOnly := fs.Bool("print", false, "")
+	uninstall := fs.Bool("uninstall", false, "")
+	if fs.Parse(args) != nil || fs.NArg() > 0 {
+		_, _ = fmt.Fprintln(stderr, "usage: mairc install [--scope user|project] [--print] [--uninstall]")
+		return 2
+	}
+	binary, err := os.Executable()
+	if err == nil {
+		binary, err = filepath.Abs(binary)
+	}
+	if err != nil {
+		_, _ = fmt.Fprintln(stderr, err)
+		return 1
+	}
+	home, _ := os.UserHomeDir()
+	project, _ := os.Getwd()
+	return install.Run(install.Options{
+		Binary: binary, Scope: *scope, Home: home, Project: project,
+		Print: *printOnly, Uninstall: *uninstall, Out: stdout,
+	})
+}
+
+// daemonStatus is the body of GET /v1/status.
+type daemonStatus struct {
+	Version  string `json:"version"`
+	UptimeS  int64  `json:"uptime_s"`
+	Agents   int    `json:"agents"`
+	Sessions int    `json:"sessions"`
+}
+
+func runStatus(getenv func(string) string, stdout io.Writer) int {
+	st, ok := fetchStatus(getenv)
+	if !ok {
+		_, _ = fmt.Fprintln(stdout, "not running")
+		return 1
+	}
+	_, _ = fmt.Fprintf(stdout, "running %s, %d agents, %d sessions, up %s\n",
+		st.Version, st.Agents, st.Sessions, time.Duration(st.UptimeS)*time.Second)
+	return 0
+}
+
+// fetchStatus asks GET /v1/status with the token, 1 s; any failure is "not running".
+func fetchStatus(getenv func(string) string) (daemonStatus, bool) {
+	var st daemonStatus
+	p, err := config.ResolvePaths(getenv)
+	if err != nil {
+		return st, false
+	}
+	settings, err := config.Load(p.Config)
+	if err != nil {
+		return st, false
+	}
+	token, err := config.ReadToken(p.Token)
+	if err != nil {
+		return st, false
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), controlTimeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+settings.Listen+"/v1/status", nil)
+	if err != nil {
+		return st, false
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err := controlClient().Do(req)
+	if err != nil {
+		return st, false
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK || json.NewDecoder(resp.Body).Decode(&st) != nil {
+		return st, false
+	}
+	return st, true
 }
