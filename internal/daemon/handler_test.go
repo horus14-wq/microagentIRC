@@ -244,8 +244,9 @@ func TestMCP(t *testing.T) {
 	}
 	t.Run("initialize answers json with a session id", func(t *testing.T) {
 		rec := do(f.h, http.MethodPost, "/mcp", nil, initializeBody)
+		note, _ := json.Marshal(mcp.Instructions) // the server's note to the model (bead mairc-bq0)
 		want := `{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-06-18","capabilities":{"tools":{}},` +
-			`"serverInfo":{"name":"mairc","version":"test"}}}`
+			`"serverInfo":{"name":"mairc","version":"test"},"instructions":` + string(note) + `}}`
 		if rec.Code != http.StatusOK || rec.Body.String() != want || rec.Header().Get("Content-Type") != "application/json" {
 			t.Fatalf("got %d %q %q", rec.Code, rec.Header().Get("Content-Type"), rec.Body.String())
 		}
