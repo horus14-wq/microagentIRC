@@ -38,10 +38,15 @@ func write(t *testing.T, path, content string, mode os.FileMode) {
 	}
 }
 
+// run runs Claude Code's row, as `mairc install --only claude`: these tests must not depend on which CLIs the host
+// running them has installed (mairc-x2y made detection the default).
 func run(o Options) (int, string) {
 	var out bytes.Buffer
 	o.Binary = nativeTestBinary(o.Binary)
 	o.Out = &out
+	if len(o.Only) == 0 && !o.Print {
+		o.Only = []string{"claude"}
+	}
 	return Run(o), out.String()
 }
 

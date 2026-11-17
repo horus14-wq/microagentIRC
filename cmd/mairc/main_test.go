@@ -131,18 +131,10 @@ func TestUsageAndExitCodes(t *testing.T) {
 		{"daemon with a flag", []string{"daemon", "--fast"}, 2, "", "usage: mairc daemon\n"},
 		{"stdio with an argument", []string{"stdio", "x"}, 2, "", "usage: mairc stdio\n"},
 		{"status with a flag", []string{"status", "-v"}, 2, "", "usage: mairc status\n"},
-		{
-			"install with an unknown flag",
-			[]string{"install", "--global"},
-			2, "",
-			"usage: mairc install [--scope user|project] [--print] [--uninstall]\n",
-		},
-		{
-			"install with an argument",
-			[]string{"install", "now"},
-			2, "",
-			"usage: mairc install [--scope user|project] [--print] [--uninstall]\n",
-		},
+		// mairc-x2y: the install usage line names the new flags (it replaces the cli bead's line).
+		{"install with an unknown flag", []string{"install", "--global"}, 2, "", installUsage + "\n"},
+		{"install with an argument", []string{"install", "now"}, 2, "", installUsage + "\n"},
+		{"install --user and --project together", []string{"install", "--user", "--project"}, 2, "", installUsage + "\n"},
 		{"hook with a bad flag", []string{"hook", "--bogus"}, 0, "", ""},
 	}
 	for _, tc := range cases {
@@ -153,6 +145,30 @@ func TestUsageAndExitCodes(t *testing.T) {
 					tc.args, code, out, errOut, tc.code, tc.stdout, tc.stderr)
 			}
 		})
+	}
+}
+
+// An unknown --only name stops before any file is read (it changes nothing in the real home).
+func TestInstallOnlyRejectsAnUnknownCLI(t *testing.T) {
+	code, out, _ := runWith([]string{"install", "--only", "claude,vim", "--yes"}, map[string]string{}, nil)
+	if code != 2 || !strings.HasPrefix(out, "usage: unknown CLI vim (supported: ") {
+		t.Fatalf("install --only claude,vim = %d, stdout %q", code, out)
+	}
+}
+
+// The yes/no question: only y or yes proceeds; anything else, end of input included, is no.
+func TestAskAcceptsOnlyYes(t *testing.T) {
+	for _, tc := range []struct {
+		in   string
+		want bool
+	}{{"y\n", true}, {"YES\n", true}, {"n\n", false}, {"\n", false}, {"", false}, {"yep\n", false}} {
+		var out bytes.Buffer
+		if got := ask(strings.NewReader(tc.in), &out, []string{"/h/.claude.json"}); got != tc.want {
+			t.Fatalf("ask(%q) = %v", tc.in, got)
+		}
+		if out.String() != "mairc will change:\n  /h/.claude.json\nProceed? [y/N] " {
+			t.Fatalf("prompt = %q", out.String())
+		}
 	}
 }
 

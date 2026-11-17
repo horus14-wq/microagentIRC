@@ -30,6 +30,15 @@ type Options struct {
 	Print     bool   // --print: change nothing, write the snippets to Out
 	Uninstall bool   // --uninstall: remove what install added
 	Out       io.Writer
+
+	// Only names the CLIs to set up (--only); empty means every supported CLI detected on this machine.
+	Only []string
+	// DryRun prints what would change, as a short diff per file, and writes nothing (--dry-run).
+	DryRun bool
+	// Confirm is asked once, with the files about to change, before anything is written; nil means yes (--yes).
+	Confirm func(files []string) bool
+	// LookPath finds a CLI's binary for detection (exec.LookPath in production); nil detects by config directory only.
+	LookPath func(file string) (string, error)
 }
 
 // hookEvents returns the Claude Code events mairc's hook runs on, in the order they are written.
@@ -69,12 +78,24 @@ func Run(o Options) int {
 		printSnippets(out, o.Binary)
 		return 0
 	}
-	mcpPath, settingsPath := paths(o, scope)
-	files := []*target{
-		{path: mcpPath, apply: mcpEdit(o.Binary, o.Uninstall)},
-		{path: settingsPath, apply: hooksEdit(o.Binary, o.Uninstall)},
+	selected, skipped, msg := selectCLIs(o)
+	if msg != "" {
+		_, _ = fmt.Fprintln(out, msg)
+		return 2
 	}
-	// Read and check every file before changing any: one unparsable file leaves both untouched.
+	for _, name := range skipped {
+		_, _ = fmt.Fprintf(out, "%s: not found, skipped\n", name)
+	}
+	var files []*target
+	for _, c := range selected {
+		for _, f := range c.files(scope, o) {
+			f := f
+			files = append(files, &target{path: f.path, apply: func(root *node) (bool, bool) {
+				return applyJSON(root, f, o.Binary, o.Uninstall)
+			}})
+		}
+	}
+	// Read, check and edit every file in memory before writing any: one unparsable file leaves all untouched.
 	for _, f := range files {
 		if err := f.load(); err != nil {
 			if errors.Is(err, errNotJSON) {
@@ -85,27 +106,110 @@ func Run(o Options) int {
 			return 1
 		}
 	}
-	changed := 0
+	var changed []*target
 	for _, f := range files {
 		edited, ok := f.apply(f.root)
 		if !ok {
 			_, _ = fmt.Fprintf(out, "cannot parse %s: fix it or use --print\n", f.path)
 			return 1
 		}
-		if !edited {
-			continue
+		if edited {
+			changed = append(changed, f)
 		}
-		if err := f.store(); err != nil {
-			_, _ = fmt.Fprintf(out, "cannot write %s\n", f.path)
-			return 1
-		}
-		_, _ = fmt.Fprintf(out, "updated %s\n", f.path)
-		changed++
 	}
-	if changed == 0 && !o.Uninstall {
+	if o.DryRun {
+		for _, f := range changed {
+			_, _ = fmt.Fprintf(out, "would update %s\n%s", f.path, shortDiff(f.raw, f.root.bytes()))
+		}
+	} else if len(changed) > 0 && o.Confirm != nil && !o.Confirm(paths(changed)) {
+		_, _ = fmt.Fprintln(out, "nothing changed")
+		return 1
+	}
+	if !o.DryRun {
+		for _, f := range changed {
+			if err := f.store(); err != nil {
+				_, _ = fmt.Fprintf(out, "cannot write %s\n", f.path)
+				return 1
+			}
+			_, _ = fmt.Fprintf(out, "updated %s\n", f.path)
+		}
+	}
+	if len(changed) == 0 && !o.Uninstall {
 		_, _ = fmt.Fprintln(out, "already installed")
 	}
 	return 0
+}
+
+// selectCLIs returns the CLIs to set up: those named by --only (an unknown name is a usage error), else every
+// supported CLI detected on this machine, with the names of the ones not found.
+func selectCLIs(o Options) (selected []cliSpec, skipped []string, usageMsg string) {
+	if len(o.Only) > 0 {
+		for _, name := range o.Only {
+			found := false
+			for _, c := range clis() {
+				if c.name == name {
+					selected, found = append(selected, c), true
+				}
+			}
+			if !found {
+				return nil, nil, fmt.Sprintf("usage: unknown CLI %s (supported: %s)", name, cliNames())
+			}
+		}
+		return selected, nil, ""
+	}
+	for _, c := range clis() {
+		if detect(c, o) {
+			selected = append(selected, c)
+		} else {
+			skipped = append(skipped, c.name)
+		}
+	}
+	return selected, skipped, ""
+}
+
+func paths(targets []*target) []string {
+	out := make([]string, 0, len(targets))
+	for _, t := range targets {
+		out = append(out, t.path)
+	}
+	return out
+}
+
+// shortDiff shows the changed region between before and after: the lines after their common head and before their
+// common tail, at most maxDiffLines of each side.
+func shortDiff(before, after []byte) string {
+	const maxDiffLines = 40
+	a, b := splitLines(before), splitLines(after)
+	head := 0
+	for head < len(a) && head < len(b) && a[head] == b[head] {
+		head++
+	}
+	tail := 0
+	for tail < len(a)-head && tail < len(b)-head && a[len(a)-1-tail] == b[len(b)-1-tail] {
+		tail++
+	}
+	var s strings.Builder
+	for side, lines := range [][]string{a[head : len(a)-tail], b[head : len(b)-tail]} {
+		mark := "- "
+		if side == 1 {
+			mark = "+ "
+		}
+		for i, line := range lines {
+			if i == maxDiffLines {
+				fmt.Fprintf(&s, "%s… (%d more lines)\n", mark, len(lines)-maxDiffLines)
+				break
+			}
+			s.WriteString(mark + line + "\n")
+		}
+	}
+	return s.String()
+}
+
+func splitLines(b []byte) []string {
+	if len(b) == 0 {
+		return nil
+	}
+	return strings.Split(strings.TrimSuffix(string(b), "\n"), "\n")
 }
 
 func usage(o Options, scope string) string {
@@ -122,13 +226,6 @@ func usage(o Options, scope string) string {
 		return "usage: scope project needs a project directory"
 	}
 	return ""
-}
-
-func paths(o Options, scope string) (mcp, settings string) {
-	if scope == "project" {
-		return filepath.Join(o.Project, ".mcp.json"), filepath.Join(o.Project, ".claude", "settings.json")
-	}
-	return filepath.Join(o.Home, ".claude.json"), filepath.Join(o.Home, ".claude", "settings.json")
 }
 
 // target is one file the installer may change.
@@ -221,43 +318,6 @@ func backup(path string, raw []byte, mode fs.FileMode) error {
 	return werr
 }
 
-// mcpEdit adds, updates or removes mcpServers.mairc.
-func mcpEdit(binary string, uninstall bool) func(root *node) (bool, bool) {
-	return func(root *node) (bool, bool) {
-		if uninstall {
-			servers := root.get("mcpServers")
-			if servers == nil || servers.kind != objectNode || !servers.del("mairc") {
-				return false, true
-			}
-			if len(servers.keys) == 0 {
-				root.del("mcpServers")
-			}
-			return true, true
-		}
-		servers, ok := root.child("mcpServers", objectNode)
-		if !ok {
-			return false, false
-		}
-		existing := servers.get("mairc")
-		if existing == nil || existing.kind != objectNode {
-			servers.set("mairc", object("command", str(binary), "args", array(str("stdio"))))
-			return true, true
-		}
-		// Ours already: update the command and args in place, keeping anything else the user added (env, ...).
-		edited := false
-		for _, kv := range []struct {
-			key   string
-			value *node
-		}{{"command", str(binary)}, {"args", array(str("stdio"))}} {
-			if !kv.value.equal(existing.get(kv.key)) {
-				existing.set(kv.key, kv.value)
-				edited = true
-			}
-		}
-		return edited, true
-	}
-}
-
 // hookCommand is the command Claude Code runs for each hook event.
 func hookCommand(binary string) string {
 	for _, c := range binary {
@@ -301,98 +361,6 @@ func isOurHook(h *node) bool {
 	}
 	fields := strings.Fields(command)
 	return len(fields) >= 2 && maircBinary(fields[0]) && fields[1] == "hook"
-}
-
-// hooksEdit adds, updates or removes mairc's hook handler on each hook event.
-func hooksEdit(binary string, uninstall bool) func(root *node) (bool, bool) {
-	return func(root *node) (bool, bool) {
-		if uninstall {
-			return removeHooks(root), true
-		}
-		hooks, ok := root.child("hooks", objectNode)
-		if !ok {
-			return false, false
-		}
-		want := hookHandler(binary)
-		edited := false
-		for _, event := range hookEvents() {
-			groups, ok := hooks.child(event, arrayNode)
-			if !ok {
-				return false, false
-			}
-			found := false
-			for _, group := range groups.items {
-				handlers := group.get("hooks")
-				if handlers == nil || handlers.kind != arrayNode {
-					continue
-				}
-				for i, h := range handlers.items {
-					if !isOurHook(h) {
-						continue
-					}
-					found = true
-					if !h.equal(want) {
-						handlers.items[i] = hookHandler(binary)
-						edited = true
-					}
-				}
-			}
-			if !found {
-				groups.items = append(groups.items, object("hooks", array(hookHandler(binary))))
-				edited = true
-			}
-		}
-		return edited, true
-	}
-}
-
-// removeHooks removes every mairc handler, then each group, event array and the hooks object that only it emptied.
-func removeHooks(root *node) bool {
-	hooks := root.get("hooks")
-	if hooks == nil || hooks.kind != objectNode {
-		return false
-	}
-	removed := false
-	for _, event := range append([]string(nil), hooks.keys...) {
-		groups := hooks.get(event)
-		if groups == nil || groups.kind != arrayNode {
-			continue
-		}
-		removedHere := false
-		kept := groups.items[:0]
-		for _, group := range groups.items {
-			handlers := group.get("hooks")
-			if handlers == nil || handlers.kind != arrayNode {
-				kept = append(kept, group)
-				continue
-			}
-			removedInGroup := false
-			keptHandlers := handlers.items[:0]
-			for _, h := range handlers.items {
-				if isOurHook(h) {
-					removedInGroup = true
-					continue
-				}
-				keptHandlers = append(keptHandlers, h)
-			}
-			handlers.items = keptHandlers
-			if removedInGroup {
-				removed, removedHere = true, true
-				if len(keptHandlers) == 0 {
-					continue // the group only held ours
-				}
-			}
-			kept = append(kept, group)
-		}
-		groups.items = kept
-		if removedHere && len(kept) == 0 {
-			hooks.del(event)
-		}
-	}
-	if removed && len(hooks.keys) == 0 {
-		root.del("hooks")
-	}
-	return removed
 }
 
 // printSnippets writes the Claude Code snippets and the generic lines for other agent CLIs; it changes no file.

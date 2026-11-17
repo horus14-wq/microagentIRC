@@ -4,6 +4,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -67,7 +68,7 @@ func run(args []string, getenv func(string) string, stdin io.Reader, stdout, std
 	case "config":
 		return runConfig(args[1:], getenv, stdout, stderr)
 	case "install":
-		return runInstall(args[1:], stdout, stderr)
+		return runInstall(args[1:], stdin, stdout, stderr)
 	case "status":
 		if !noArgs("status", args[1:], stderr) {
 			return 2
@@ -283,15 +284,41 @@ func controlClient() *http.Client {
 	return &http.Client{Transport: &http.Transport{Proxy: nil, DisableKeepAlives: true}}
 }
 
-func runInstall(args []string, stdout, stderr io.Writer) int {
+// installUsage is `mairc install`'s usage line.
+const installUsage = "usage: mairc install [--only cli,...] [--user|--project] [--dry-run] [--yes] [--uninstall] [--print]"
+
+// runInstall sets mairc up for every supported coding CLI found on this machine (or those --only names), after one
+// yes/no question unless --yes or --dry-run.
+func runInstall(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("install", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	scope := fs.String("scope", "user", "")
+	user := fs.Bool("user", false, "")
+	project := fs.Bool("project", false, "")
+	only := fs.String("only", "", "")
+	dryRun := fs.Bool("dry-run", false, "")
+	yes := fs.Bool("yes", false, "")
 	printOnly := fs.Bool("print", false, "")
 	uninstall := fs.Bool("uninstall", false, "")
-	if fs.Parse(args) != nil || fs.NArg() > 0 {
-		_, _ = fmt.Fprintln(stderr, "usage: mairc install [--scope user|project] [--print] [--uninstall]")
+	if fs.Parse(args) != nil || fs.NArg() > 0 || (*user && *project) {
+		_, _ = fmt.Fprintln(stderr, installUsage)
 		return 2
+	}
+	switch {
+	case *user:
+		*scope = "user"
+	case *project:
+		*scope = "project"
+	}
+	var onlyList []string
+	for _, name := range strings.Split(*only, ",") {
+		if name = strings.TrimSpace(name); name != "" {
+			onlyList = append(onlyList, name)
+		}
+	}
+	var confirm func([]string) bool
+	if !*yes {
+		confirm = func(files []string) bool { return ask(stdin, stdout, files) }
 	}
 	binary, err := os.Executable()
 	if err == nil {
@@ -302,11 +329,28 @@ func runInstall(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	home, _ := os.UserHomeDir()
-	project, _ := os.Getwd()
+	cwd, _ := os.Getwd()
 	return install.Run(install.Options{
-		Binary: binary, Scope: *scope, Home: home, Project: project,
+		Binary: binary, Scope: *scope, Home: home, Project: cwd,
 		Print: *printOnly, Uninstall: *uninstall, Out: stdout,
+		Only: onlyList, DryRun: *dryRun, Confirm: confirm, LookPath: exec.LookPath,
 	})
+}
+
+// ask lists the files about to change and reads one yes/no answer; anything but y or yes (end of input included)
+// is no.
+func ask(stdin io.Reader, stdout io.Writer, files []string) bool {
+	_, _ = fmt.Fprintln(stdout, "mairc will change:")
+	for _, f := range files {
+		_, _ = fmt.Fprintf(stdout, "  %s\n", f)
+	}
+	_, _ = fmt.Fprint(stdout, "Proceed? [y/N] ")
+	if stdin == nil {
+		return false
+	}
+	line, _ := bufio.NewReader(stdin).ReadString('\n')
+	answer := strings.ToLower(strings.TrimSpace(line))
+	return answer == "y" || answer == "yes"
 }
 
 // daemonStatus is the body of GET /v1/status.
