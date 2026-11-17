@@ -518,3 +518,23 @@ func (s *Store) MoveSeat(ctx context.Context, name, from, to string) error {
 		return err
 	})
 }
+
+// PrivateSince returns, per recipient, the time of the sender's latest private message at or after since
+// (core.Store). It reads the messages themselves, so there is nothing extra to keep in step.
+func (s *Store) PrivateSince(ctx context.Context, sender string, since time.Time) (map[string]time.Time, error) {
+	rows, err := s.stmts["PrivateSince"].QueryContext(ctx, sender, ms(since))
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	out := make(map[string]time.Time)
+	for rows.Next() {
+		var recipient string
+		var last int64
+		if err := rows.Scan(&recipient, &last); err != nil {
+			return nil, err
+		}
+		out[recipient] = at(last)
+	}
+	return out, rows.Err()
+}

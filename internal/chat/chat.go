@@ -207,7 +207,7 @@ func (s *Service) Send(ctx context.Context, from string, to []string, text strin
 		}
 	}
 	now := s.clock.Now()
-	if err := s.checkCooldown(ctx, from, room, set, now); err != nil {
+	if err := s.checkCooldown(ctx, from, recipients, set, now); err != nil {
 		return err
 	}
 	var msg core.Message
@@ -239,26 +239,42 @@ func (s *Service) Send(ctx context.Context, from string, to []string, text strin
 	return nil
 }
 
-func (s *Service) checkCooldown(ctx context.Context, from string, room bool, set core.Settings, now time.Time) error {
-	cooldown := set.PrivateCooldownS
+// checkCooldown refuses a send that comes too soon after the sender's last one of the same kind. The two kinds are
+// counted apart:
+//   - the room (no recipients): one message per PublicCooldownS per sender;
+//   - private: one message per PrivateCooldownS per sender AND recipient. Writing to one agent does not stop the
+//     sender from writing to another. A message to several recipients is refused when any of them is still on
+//     cooldown, with the longest time left, because a message goes to all of its recipients or to none.
+func (s *Service) checkCooldown(ctx context.Context, from string, recipients []string, set core.Settings, now time.Time) error {
+	room := len(recipients) == 0
+	cooldown := time.Duration(set.PrivateCooldownS) * time.Second
 	if room {
-		cooldown = set.PublicCooldownS
+		cooldown = time.Duration(set.PublicCooldownS) * time.Second
 	}
 	if cooldown <= 0 {
 		return nil
 	}
-	a, ok, err := s.store.Agent(ctx, from)
-	if err != nil || !ok {
-		return err
-	}
-	last := a.LastPrivateAt
+	var left time.Duration
 	if room {
-		last = a.LastPublicAt
+		a, ok, err := s.store.Agent(ctx, from)
+		if err != nil || !ok {
+			return err
+		}
+		if !a.LastPublicAt.IsZero() {
+			left = cooldown - now.Sub(a.LastPublicAt)
+		}
+	} else {
+		// One second of slack on the window: stored times are whole milliseconds.
+		last, err := s.store.PrivateSince(ctx, from, now.Add(-cooldown-time.Second))
+		if err != nil {
+			return err
+		}
+		for _, name := range recipients {
+			if at, ok := last[name]; ok {
+				left = max(left, cooldown-now.Sub(at))
+			}
+		}
 	}
-	if last.IsZero() {
-		return nil
-	}
-	left := time.Duration(cooldown)*time.Second - now.Sub(last)
 	if left <= 0 {
 		return nil
 	}

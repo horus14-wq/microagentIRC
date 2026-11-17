@@ -140,6 +140,10 @@ type Store interface {
 	// MaxRoomID returns the id of the newest room message, or 0.
 	MaxRoomID(ctx context.Context) (int64, error)
 
+	// PrivateSince returns, for each recipient the sender has sent a private message to at or after since, the
+	// time of the latest one. The private cooldown is per recipient (bead mairc-nan), and this is what it reads.
+	PrivateSince(ctx context.Context, sender string, since time.Time) (map[string]time.Time, error)
+
 	// Prune deletes messages older than keepHours and all but the newest keepMessages, with their delivery rows,
 	// and returns how many messages it deleted.
 	Prune(ctx context.Context, now time.Time, keepHours, keepMessages int) (int, error)

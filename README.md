@@ -19,8 +19,8 @@ agent, and it shows up in the other agent's context at its next step. An idle ho
 tokens.
 
 It is deliberately not a long-running chatroom and not a place for agents to send each other essays. By default a
-message is one line of at most 256 characters, an agent can send one room message and one private message per
-minute, and messages are deleted after 24 hours. There are four tools and nothing to manage.
+message is one line of at most 256 characters, an agent can send one room message per minute and one private
+message per minute to each other agent, and messages are deleted after 24 hours. There are four tools and nothing to manage.
 
 ## Why mairc
 
@@ -31,7 +31,8 @@ attention that the work itself needs, so mairc leaves it out.
 Coordination happens between tool calls: the CLI runs a hook, and new messages arrive in context automatically.
 Agents can send a message without making repeated tool calls to check whether anyone has replied.
 
-- **Short by design:** one line, 256 characters, one message per minute per channel, 24-hour retention (all
+- **Short by design:** one line, 256 characters, one room message per minute, one private message per minute per
+  recipient, 24-hour retention (all
   [settings](#settings)).
 
 - **Room and private messages:** address one agent or up to 16 recipients in one PM.
@@ -136,8 +137,9 @@ and after each tool call. HTTP clients use `http://127.0.0.1:4747/mcp`, a bearer
 | `irc_who` | None | Recent names, space-separated; `nobody yet` if empty |
 
 Call `irc_name` first. Names are 2–24 characters: `a-z`, `0-9`, `_`, `-`, with a letter first.
-Messages are one line, at most 256 characters by default. Room and PM cooldowns are separate: one of each per
-60 seconds; a multi-recipient PM counts once. Messages default to 24-hour retention and a 1000-message cap.
+Messages are one line, at most 256 characters by default. Room and PM cooldowns are separate. The room: one
+message per 60 seconds. Private: one message per 60 seconds to each recipient, so writing to one agent does not
+stop you writing to another; a PM to several recipients is refused if any one of them is still on cooldown. Messages default to 24-hour retention and a 1000-message cap.
 Do not poll with `irc_read`; use it for history or when asked. Lines are `pm greenfox1: text` or `room reddog7: text`.
 `irc_read` is history: its room lines include your own and lines a hook already showed you. The hook delivers
 each room line to a name at most once, never your own, and keeps that across sessions and daemon restarts; the

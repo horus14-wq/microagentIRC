@@ -54,6 +54,50 @@ func TestHookSessionBindings(t *testing.T) {
 	}
 }
 
+// PrivateSince: per recipient, the sender's latest private message at or after a time. Room messages, other senders
+// and older messages do not count (bead mairc-nan: the private cooldown is per recipient).
+func TestPrivateSince(t *testing.T) {
+	ctx := context.Background()
+	t0 := start()
+	s := memory(ctx, t)
+	for i, name := range []string{"alice", "bob", "carol", "dave"} {
+		must(t, s.UpsertAgent(ctx, name, "seat"+string(rune('a'+i)), t0))
+	}
+	send := func(sender string, to []string, at time.Time) {
+		t.Helper()
+		_, err := s.InsertPM(ctx, sender, to, "x", at)
+		must(t, err)
+	}
+	send("alice", []string{"bob"}, t0)
+	send("alice", []string{"bob", "carol"}, t0.Add(10*time.Second))
+	send("alice", []string{"dave"}, t0.Add(-time.Hour)) // before the window
+	send("bob", []string{"alice", "carol"}, t0.Add(20*time.Second))
+	_, err := s.InsertRoom(ctx, "alice", "room", t0.Add(30*time.Second))
+	must(t, err)
+
+	got, err := s.PrivateSince(ctx, "alice", t0.Add(-time.Minute))
+	must(t, err)
+	if len(got) != 2 || !got["bob"].Equal(t0.Add(10*time.Second)) || !got["carol"].Equal(t0.Add(10*time.Second)) {
+		t.Fatalf("alice's recipients since -1m: %v", got)
+	}
+	// The bound is inclusive, and a later bound leaves out what came before it.
+	got, err = s.PrivateSince(ctx, "alice", t0.Add(10*time.Second))
+	must(t, err)
+	if len(got) != 2 {
+		t.Fatalf("since exactly the latest message: %v", got)
+	}
+	got, err = s.PrivateSince(ctx, "alice", t0.Add(11*time.Second))
+	must(t, err)
+	if len(got) != 0 {
+		t.Fatalf("since after the latest message: %v", got)
+	}
+	got, err = s.PrivateSince(ctx, "carol", t0.Add(-time.Hour))
+	must(t, err)
+	if len(got) != 0 {
+		t.Fatalf("carol sent nothing: %v", got)
+	}
+}
+
 func TestMoveSeat(t *testing.T) {
 	ctx := context.Background()
 	t0 := start()
@@ -551,14 +595,14 @@ func TestParseQueries(t *testing.T) {
 		"AgentSeat", "ReleaseSeat", "InsertAgent", "UpdateAgent", "AgentByName", "AgentBySeat", "Agents", "Touch",
 		"InsertMessage", "SetLastPublic", "SetLastPrivate", "InsertDelivery", "UnreadPMs", "MarkDelivered",
 		"HasUnreadPM", "RoomTail", "RoomSince", "SetRoomCursor", "MaxRoomID", "PruneByAge", "PruneByCount",
-		"BindHookSession", "HookSessions", "PruneHookSessions", "MoveSeat",
+		"BindHookSession", "HookSessions", "PruneHookSessions", "MoveSeat", "PrivateSince",
 	} {
 		if embedded[name] == "" {
 			t.Errorf("statement %s is missing from queries.sql", name)
 		}
 	}
-	if len(embedded) != 25 {
-		t.Errorf("queries.sql has %d statements, the code uses 25", len(embedded))
+	if len(embedded) != 26 {
+		t.Errorf("queries.sql has %d statements, the code uses 26", len(embedded))
 	}
 }
 

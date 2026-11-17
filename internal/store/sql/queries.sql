@@ -83,3 +83,7 @@ DELETE FROM hook_session WHERE last_used_ms < ?;
 
 -- name: MoveSeat
 UPDATE agent SET seat = ? WHERE name = ? AND seat = ?;
+
+-- name: PrivateSince
+SELECT d.recipient, MAX(m.at_ms) FROM message m JOIN delivery d ON d.message_id = m.id
+WHERE m.kind = 'pm' AND m.sender = ? AND m.at_ms >= ? GROUP BY d.recipient;

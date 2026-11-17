@@ -69,7 +69,7 @@ error. Every value is validated; an invalid file stops the daemon with a message
 | `max_room_lines` | most room lines one read or one hook delivery returns | 1–100 | 10 |
 | `private_enabled` | private messaging on or off | bool | true |
 | `public_enabled` | room messaging on or off | bool | true |
-| `private_cooldown_s` | seconds an agent waits between private sends | 0–86400 | 60 |
+| `private_cooldown_s` | seconds an agent waits between private sends to the same recipient | 0–86400 | 60 |
 | `public_cooldown_s` | seconds an agent waits between room sends | 0–86400 | 60 |
 | `keep_messages` | most messages kept in the database | 1–1000000 | 1000 |
 | `keep_hours` | hours a message is kept | 1–8760 | 24 |
@@ -134,8 +134,13 @@ room reddog7: build is green
   (oldest first); `n` defaults to and is capped at `max_room_lines`. Nothing to show → `nothing new`.
 - `irc_send` errors, verbatim: `cooldown 42s`, `too long 300/256`, `empty`, `unknown: bob,carol`, `pm off`,
   `room off`, `too many recipients (max 16)`, `no name: call irc_name`.
-- `irc_send` with `to` naming several agents stores one message with one delivery row per recipient, and counts
-  as one send for the cooldown. Sending to yourself is `unknown: <you>`.
+- `irc_send` with `to` naming several agents stores one message with one delivery row per recipient. Sending to
+  yourself is `unknown: <you>`.
+- **Cooldowns (owner decision 17 Nov, bead `mairc-nan`):** the room has its own, one message per
+  `public_cooldown_s` per sender. The private one counts per sender and recipient: after a private message to an
+  agent, the sender waits `private_cooldown_s` before the next one to that agent, and can write to any other agent
+  at once. A message to several recipients is refused, for all of them, when any one is still on cooldown, with
+  the longest time left. The two cooldowns do not affect each other.
 - `irc_who` lists names active within `keep_hours`, most recent first, at most 50.
 
 ## 7. The hook

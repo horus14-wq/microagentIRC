@@ -44,7 +44,8 @@ type fakeStore struct {
 	agents   map[string]*core.Agent
 	room     []core.Message
 	pms      []core.Message
-	unread   map[string][]int64 // recipient -> undelivered pm ids, oldest first
+	unread   map[string][]int64      // recipient -> undelivered pm ids, oldest first
+	lastPM   map[[2]string]time.Time // {sender, recipient} -> the latest private message's time
 	pruneLog int
 	pruneErr error
 	// afterUnread runs once, after UnreadPMs has taken its messages and before it returns (a send racing a read).
@@ -146,13 +147,30 @@ func (f *fakeStore) InsertPM(_ context.Context, sender string, to []string, body
 	f.nextID++
 	m := core.Message{ID: f.nextID, At: now, Sender: sender, Kind: core.KindPM, Body: body}
 	f.pms = append(f.pms, m)
+	if f.lastPM == nil {
+		f.lastPM = map[[2]string]time.Time{}
+	}
 	for _, r := range to {
 		f.unread[r] = append(f.unread[r], m.ID)
+		f.lastPM[[2]string{sender, r}] = now
 	}
 	if a, ok := f.agents[sender]; ok {
 		a.LastPrivateAt = now
 	}
 	return m, nil
+}
+
+func (f *fakeStore) PrivateSince(_ context.Context, sender string, since time.Time) (map[string]time.Time, error) {
+	f.hit()
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := map[string]time.Time{}
+	for pair, last := range f.lastPM {
+		if pair[0] == sender && !last.Before(since) {
+			out[pair[1]] = last
+		}
+	}
+	return out, nil
 }
 
 func (f *fakeStore) UnreadPMs(_ context.Context, recipient string, _ time.Time) ([]core.Message, error) {
@@ -353,19 +371,47 @@ func TestSendCooldown(t *testing.T) {
 	if err := s.Send(ctx, "alice", nil, "two"); err == nil || err.Error() != "cooldown 1s" {
 		t.Fatalf("at 59s: %v", err)
 	}
-	// Room and private cooldowns are independent; one multi-recipient message is one send.
+	// Room and private cooldowns are independent.
 	if err := s.Send(ctx, "alice", []string{"bob"}, "pm"); err != nil {
 		t.Fatalf("pm under a room cooldown: %v", err)
 	}
-	if err := st.UpsertAgent(ctx, "carol", "seatc", clk.Now()); err != nil {
-		t.Fatal(err)
+	for _, name := range []string{"carol", "dave"} {
+		if err := st.UpsertAgent(ctx, name, "seat-"+name, clk.Now()); err != nil {
+			t.Fatal(err)
+		}
 	}
-	if err := s.Send(ctx, "alice", []string{"carol"}, "pm2"); err == nil || !errors.Is(err, core.ErrCooldown) {
-		t.Fatalf("second pm: %v", err)
+	// The private cooldown is per recipient (bead mairc-nan; before, one private message blocked the sender from
+	// writing to anyone for a minute): alice can write to carol at once, but not to bob again.
+	if err := s.Send(ctx, "alice", []string{"carol"}, "pm2"); err != nil {
+		t.Fatalf("a pm to another agent right after one to bob: %v", err)
 	}
-	clk.add(time.Second) // 60 s after the first room send
+	clk.add(20 * time.Second)
+	if err := s.Send(ctx, "alice", []string{"bob"}, "again"); err == nil || err.Error() != "cooldown 40s" || !errors.Is(err, core.ErrCooldown) {
+		t.Fatalf("a second pm to bob at 20s: %v", err)
+	}
+	// One recipient on cooldown refuses the whole message, with the longest time left, and nobody gets it.
+	sent := len(st.pms)
+	if err := s.Send(ctx, "alice", []string{"dave", "bob", "carol"}, "all"); err == nil || err.Error() != "cooldown 40s" {
+		t.Fatalf("a multi-recipient pm with bob and carol on cooldown: %v", err)
+	}
+	if len(st.pms) != sent || len(st.unread["dave"]) != 0 {
+		t.Fatalf("a refused message was stored or delivered: %d pms, dave %v", len(st.pms), st.unread["dave"])
+	}
+	// dave alone is fine, and bob's own cooldown towards alice is his own: he can answer at once.
+	if err := s.Send(ctx, "alice", []string{"dave"}, "you"); err != nil {
+		t.Fatalf("a pm to dave: %v", err)
+	}
+	if err := s.Send(ctx, "bob", []string{"alice"}, "reply"); err != nil {
+		t.Fatalf("bob's reply: %v", err)
+	}
+	// A private message does not start the room cooldown.
+	clk.add(time.Second) // 60 s after alice's first room send, 21 s after her pms
 	if err := s.Send(ctx, "alice", nil, "two"); err != nil {
-		t.Fatalf("at 60s: %v", err)
+		t.Fatalf("room at 60s: %v", err)
+	}
+	clk.add(39 * time.Second) // 60 s after the pms to bob and carol
+	if err := s.Send(ctx, "alice", []string{"bob", "carol"}, "now"); err != nil {
+		t.Fatalf("after the cooldown: %v", err)
 	}
 }
 

@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"os/exec"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -235,6 +236,46 @@ func TestAnOlderClientIsServedAsBefore(t *testing.T) {
 		t.Fatalf("an unnamed old client at session start: %q", got)
 	}
 	_ = old
+}
+
+// The private cooldown is per recipient: with the default 60 seconds in force, an agent that has just written to
+// one agent can write to another at once, but not to the first again; and the room has a cooldown of its own.
+func TestThePrivateCooldownIsPerRecipient(t *testing.T) {
+	w := newWorld(t, map[string]any{"private_cooldown_s": 60, "public_cooldown_s": 60})
+	a, b, c := w.newAgent("seat-a"), w.newAgent("seat-b"), w.newAgent("seat-c")
+	a.join()
+	nameB, nameC := b.join(), c.join()
+	cooldown := regexp.MustCompile(`^cooldown \d+s$`)
+	refused := func(args map[string]any) string {
+		t.Helper()
+		text, isError := a.call("irc_send", args)
+		if !isError {
+			t.Fatalf("irc_send %v succeeded with %q", args, text)
+		}
+		return text
+	}
+	a.ok("irc_send", map[string]any{"text": "to b", "to": nameB})
+	a.ok("irc_send", map[string]any{"text": "to c", "to": nameC}) // another agent: no wait
+	if got := refused(map[string]any{"text": "to b again", "to": nameB}); !cooldown.MatchString(got) {
+		t.Fatalf("a second private message to the same agent: %q", got)
+	}
+	if got := refused(map[string]any{"text": "to both", "to": nameB + "," + nameC}); !cooldown.MatchString(got) {
+		t.Fatalf("a private message to two agents on cooldown: %q", got)
+	}
+	// The room is counted apart: the private messages did not start its cooldown, and one room message does.
+	a.ok("irc_send", map[string]any{"text": "room one"})
+	if got := refused(map[string]any{"text": "room two"}); !cooldown.MatchString(got) {
+		t.Fatalf("a second room message: %q", got)
+	}
+	// Each side has its own cooldown: b can answer a at once.
+	b.ok("irc_send", map[string]any{"text": "reply", "to": a.name})
+	// What arrived: one message each, nothing from the refused sends.
+	if out, _, _ := w.hook("seat-b", "--client", "plain", "--event", "PostToolUse"); out != "irc:\npm "+a.name+": to b\n" {
+		t.Fatalf("b's hook printed %q", out)
+	}
+	if out, _, _ := w.hook("seat-c", "--client", "plain", "--event", "PostToolUse"); out != "irc:\npm "+a.name+": to c\n" {
+		t.Fatalf("c's hook printed %q", out)
+	}
 }
 
 // Three agents start in one seat and let irc_name choose. Each gets its own name, keeps it across a daemon
