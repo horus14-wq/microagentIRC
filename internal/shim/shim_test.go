@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -27,11 +28,12 @@ type fakeDaemon struct {
 	t       *testing.T
 	handler func(reqSeen, *http.Request) (int, string, http.Header)
 	seen    chan reqSeen
+	watches chan string // the session id of each watch the shim opened
 	up      atomic.Bool
 }
 
 func newFakeDaemon(t *testing.T, handler func(reqSeen, *http.Request) (int, string, http.Header)) (*fakeDaemon, *httptest.Server) {
-	d := &fakeDaemon{t: t, handler: handler, seen: make(chan reqSeen, 32)}
+	d := &fakeDaemon{t: t, handler: handler, seen: make(chan reqSeen, 32), watches: make(chan string, 32)}
 	d.up.Store(true)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == healthPath {
@@ -40,6 +42,15 @@ func newFakeDaemon(t *testing.T, handler func(reqSeen, *http.Request) (int, stri
 				return
 			}
 			w.WriteHeader(http.StatusOK)
+			return
+		}
+		if r.URL.Path == watchPath {
+			// The shim's watch (bead mairc-648) is not one of the scripted /mcp exchanges: it is counted apart
+			// and held open until the shim goes away, as the daemon holds it.
+			d.watches <- r.Header.Get("Mcp-Session-Id")
+			w.WriteHeader(http.StatusOK)
+			w.(http.Flusher).Flush()
+			<-r.Context().Done()
 			return
 		}
 		body, _ := io.ReadAll(r.Body)
@@ -279,5 +290,65 @@ func TestEOFReturnsNil(t *testing.T) {
 	err := runShim(Options{BaseURL: srv.URL, Token: "t", In: strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"ping"}`), Out: &out})
 	if err != nil || !strings.Contains(out.String(), "{}") {
 		t.Fatalf("no-newline line: err=%v out=%q", err, out.String())
+	}
+}
+
+// The shim announces a watch on initialize, opens one for each session it gets, and sends the seat the daemon put
+// in force when it initializes again after a daemon restart.
+func TestTheShimWatchesItsSessionAndKeepsTheSeatItWasGiven(t *testing.T) {
+	var inits atomic.Int32
+	var failed atomic.Bool
+	initSeats := make(chan string, 4)
+	announced := make(chan string, 4)
+	d, srv := newFakeDaemon(t, func(s reqSeen, r *http.Request) (int, string, http.Header) {
+		var m map[string]json.RawMessage
+		_ = json.Unmarshal([]byte(s.body), &m)
+		method := ""
+		_ = json.Unmarshal(m["method"], &method)
+		h := http.Header{}
+		if method == "initialize" {
+			n := inits.Add(1)
+			initSeats <- s.seat
+			announced <- r.Header.Get("X-Mairc-Watch")
+			h.Set("Mcp-Session-Id", "sess-"+strconv.Itoa(int(n)))
+			h.Set("X-Mairc-Seat", "seat-a#0011aabb") // the daemon made the seat this session's own
+			return http.StatusOK, `{"jsonrpc":"2.0","id":1,"result":{}}`, h
+		}
+		if failed.CompareAndSwap(false, true) {
+			return http.StatusNotFound, "", h // the daemon restarted and forgot the session
+		}
+		return http.StatusOK, `{"jsonrpc":"2.0","id":9,"result":{"tools":[]}}`, h
+	})
+	// The agent CLI keeps the shim's stdin open until the watches have been seen: a watch lives as long as the shim.
+	in, feed := io.Pipe()
+	done := make(chan error, 1)
+	go func() {
+		done <- runShim(Options{BaseURL: srv.URL, Token: "t", Seat: "seat-a", In: in, Out: io.Discard})
+	}()
+	if _, err := io.WriteString(feed, `{"jsonrpc":"2.0","id":1,"method":"initialize"}`+"\n"+
+		`{"jsonrpc":"2.0","id":9,"method":"tools/list"}`+"\n"); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		_ = feed.Close()
+		if err := <-done; err != nil {
+			t.Errorf("the shim ended with %v", err)
+		}
+	}()
+	if first, second := <-initSeats, <-initSeats; first != "seat-a" || second != "seat-a#0011aabb" {
+		t.Fatalf("initialize sent seats %q then %q", first, second)
+	}
+	if first, second := <-announced, <-announced; first != "1" || second != "1" {
+		t.Fatalf("X-Mairc-Watch on initialize: %q then %q", first, second)
+	}
+	for _, want := range []string{"sess-1", "sess-2"} {
+		select {
+		case got := <-d.watches:
+			if got != want {
+				t.Fatalf("a watch for session %q, want %q", got, want)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatalf("no watch was opened for %s", want)
+		}
 	}
 }

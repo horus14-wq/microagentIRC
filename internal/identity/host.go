@@ -99,3 +99,38 @@ func SessionFromEnv(getenv func(string) string) string {
 	}
 	return ""
 }
+
+// A seat remembers one name. When a second agent attaches from a seat whose name another live session is using,
+// the daemon gives it a seat of its own: the seat it sent, "#" and 8 hexadecimal characters ("@pc/cwd:/w#3fa91c0e").
+const (
+	ownMark = "#"
+	ownTag  = 8
+)
+
+// OwnSeat returns the seat made the session's own with the first 8 characters of tag, which must be at least 8
+// hexadecimal characters (a session id).
+func OwnSeat(seat, tag string) string {
+	return seat + ownMark + tag[:ownTag]
+}
+
+// SharedSeat returns the seat without the parts OwnSeat added: the seat the agent's shim and hook compute. A seat
+// with no such part is returned unchanged.
+func SharedSeat(seat string) string {
+	for {
+		i := strings.LastIndex(seat, ownMark)
+		if i < 0 || len(seat)-i-1 != ownTag || !isHex(seat[i+1:]) {
+			return seat
+		}
+		seat = seat[:i]
+	}
+}
+
+func isHex(s string) bool {
+	for i := range len(s) {
+		c := s[i]
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
+		}
+	}
+	return true
+}

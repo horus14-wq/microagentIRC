@@ -110,3 +110,27 @@ func TestSessionIDs(t *testing.T) {
 		}
 	}
 }
+
+func TestOwnSeats(t *testing.T) {
+	own := OwnSeat("@pc/cwd:/w", "3fa91c0e77aa")
+	if own != "@pc/cwd:/w#3fa91c0e" {
+		t.Fatalf("OwnSeat = %q", own)
+	}
+	for _, tc := range []struct{ seat, want string }{
+		{own, "@pc/cwd:/w"},
+		{OwnSeat(own, "00112233"), "@pc/cwd:/w"},
+		{"@pc/cwd:/w", "@pc/cwd:/w"},
+		// A "#" that is part of a folder name is not an own-seat part.
+		{"@pc/cwd:/w/issue#12", "@pc/cwd:/w/issue#12"},
+		{"@pc/cwd:/w#notahexx", "@pc/cwd:/w#notahexx"},
+		{"@pc/cwd:/w#3FA91C0E", "@pc/cwd:/w#3FA91C0E"},
+		{"", ""},
+	} {
+		if got := SharedSeat(tc.seat); got != tc.want {
+			t.Errorf("SharedSeat(%q) = %q, want %q", tc.seat, got, tc.want)
+		}
+	}
+	if HostOf(own) != "pc" || Legacy(own) != "cwd:/w#3fa91c0e" {
+		t.Fatalf("an own seat keeps its machine: %q %q", HostOf(own), Legacy(own))
+	}
+}

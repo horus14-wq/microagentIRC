@@ -388,7 +388,8 @@ func TestHookEmptyTouchesNoDatabase(t *testing.T) {
 		t.Fatalf("logged %q: the empty path touched the database", *f.logs)
 	}
 	// Control: a lookup that needs the database fails and is logged, still silently.
-	if rec := hook(f.srv, `{"seat":"seat-b"}`); rec.Code != http.StatusNoContent || len(*f.logs) != 1 {
+	// (A seat no live session is attached from: one that is resolves from memory since bead mairc-648.)
+	if rec := hook(f.srv, `{"seat":"seat-elsewhere"}`); rec.Code != http.StatusNoContent || len(*f.logs) != 1 {
 		t.Fatalf("control: %d, logs %q", rec.Code, *f.logs)
 	}
 }
@@ -508,6 +509,7 @@ func TestProtocolDoc(t *testing.T) {
 		"### `POST /v1/hook`",
 		"### `POST /v1/reload`",
 		"### `GET /v1/status`",
+		"### `GET /v1/watch`", // added by bead mairc-648
 	}
 	if strings.Join(endpoints, "\n") != strings.Join(want, "\n") {
 		t.Fatalf("endpoint headings %q, want %q", endpoints, want)

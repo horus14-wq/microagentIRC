@@ -142,6 +142,8 @@ func run(ctx context.Context, o Options, logf func(format string, args ...any)) 
 		WriteTimeout:      writeTimeout,
 		IdleTimeout:       idleTimeout,
 	}
+	// The shims' watches never end by themselves; a shutdown must not wait for them.
+	httpServer.RegisterOnShutdown(srv.stop)
 	served := make(chan error, 1)
 	go func() { served <- httpServer.Serve(ln) }()
 	logf("start %s %s", o.Version, settings.Listen)

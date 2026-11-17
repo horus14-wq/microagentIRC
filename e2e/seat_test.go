@@ -236,3 +236,40 @@ func TestAnOlderClientIsServedAsBefore(t *testing.T) {
 	}
 	_ = old
 }
+
+// Three agents start in one seat and let irc_name choose. Each gets its own name, keeps it across a daemon
+// restart, and the first one's name is free again for an agent that starts there after it has gone.
+func TestAgentsInOneSeatEachGetAndKeepTheirOwnName(t *testing.T) {
+	w := newWorld(t, nil)
+	const seat = "shared-folder"
+	agents := []*agent{w.newAgent(seat), w.newAgent(seat), w.newAgent(seat)}
+	seen := map[string]bool{}
+	for _, a := range agents {
+		name := a.join()
+		if seen[name] {
+			t.Fatalf("two agents in one seat were both named %s", name)
+		}
+		seen[name] = true
+	}
+
+	w.stopDaemon()
+	w.startDaemon()
+	// In reverse order, so that the agent that had the seat first is not the first to come back.
+	for i := len(agents) - 1; i >= 0; i-- {
+		a := agents[i]
+		a.ok("irc_send", map[string]any{"text": "back"})
+		if got := a.ok("irc_name", nil); got != "you are "+a.name {
+			t.Fatalf("after the restart %s was told %q", a.name, got)
+		}
+	}
+
+	// The first agent leaves; whoever starts in the seat next is that agent again.
+	first := agents[0]
+	first.close()
+	w.until("the first agent's session is dropped", func() bool {
+		late := w.newAgent(seat)
+		defer late.close()
+		got, isErr := late.call("irc_name", nil)
+		return !isErr && got == "you are "+first.name
+	})
+}

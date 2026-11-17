@@ -1,13 +1,19 @@
 package daemon
 
 import (
+	"context"
 	"net/http"
+	"net/http/httptest"
+	"runtime"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/horus14-wq/microagentIRC/internal/core"
+	"github.com/horus14-wq/microagentIRC/internal/identity"
 	"github.com/horus14-wq/microagentIRC/internal/mcp"
+	"github.com/horus14-wq/microagentIRC/internal/names"
 	"github.com/horus14-wq/microagentIRC/internal/tools"
 )
 
@@ -368,5 +374,179 @@ func TestASessionResolvedHookTouchesNoDatabaseWhenNothingIsDue(t *testing.T) {
 	}
 	if len(*f.logs) != 0 {
 		t.Fatalf("logged %q: the empty path touched the database", *f.logs)
+	}
+}
+
+// attach opens a session the way a current shim does (it announces a watch) and returns the session id and the
+// seat the daemon put in force.
+func attach(t *testing.T, f *fixture, seat string, pid int) (id, inForce string) {
+	t.Helper()
+	headers := map[string]string{headerSeat: seat, headerWatch: "1"}
+	if pid != 0 {
+		headers[headerPid] = strconv.Itoa(pid)
+	}
+	rec := do(f.srv, http.MethodPost, "/mcp", headers, initializeBody)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("initialize: %d", rec.Code)
+	}
+	return rec.Header().Get(headerSession), rec.Header().Get(headerSeat)
+}
+
+func sessionName(f *fixture, id string) string {
+	f.srv.mu.Lock()
+	defer f.srv.mu.Unlock()
+	if sess := f.srv.sessions[id]; sess != nil {
+		return sess.Name
+	}
+	return "<no session>"
+}
+
+// watching holds a watch open for the session until the returned function is called, which waits for the daemon
+// to have dropped the session.
+func watching(t *testing.T, f *fixture, id string) (stop func()) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan int, 1)
+	go func() {
+		req := httptest.NewRequestWithContext(ctx, http.MethodGet, "/v1/watch", http.NoBody)
+		req.Header.Set("Authorization", "Bearer "+testToken)
+		req.Header.Set(headerSession, id)
+		rec := httptest.NewRecorder()
+		f.srv.ServeHTTP(rec, req)
+		done <- rec.Code
+	}()
+	for range 2000 {
+		f.srv.mu.Lock()
+		sess := f.srv.sessions[id]
+		open := sess != nil && sess.watchers == 1
+		f.srv.mu.Unlock()
+		if open {
+			return func() {
+				cancel()
+				if code := <-done; code != http.StatusOK {
+					t.Fatalf("watch answered %d", code)
+				}
+			}
+		}
+		runtime.Gosched()
+	}
+	cancel()
+	t.Fatal("the watch never opened")
+	return nil
+}
+
+// Agents that share a seat each get their own name, also when they let irc_name choose it.
+func TestASecondLiveAgentInASeatGetsItsOwnSeatAndName(t *testing.T) {
+	f := boundFixture(t)
+	const seat = "@pc/cwd:/w"
+	first, firstSeat := attach(t, f, seat, 7)
+	if firstSeat != seat {
+		t.Fatalf("the first agent keeps the seat it sent, got %q", firstSeat)
+	}
+	firstName := strings.TrimPrefix(call(t, f.srv, first, "irc_name", `{}`), "you are ")
+
+	second, secondSeat := attach(t, f, seat, 7)
+	if identity.SharedSeat(secondSeat) != seat || secondSeat == seat {
+		t.Fatalf("the second agent's seat is %q, want its own under %q", secondSeat, seat)
+	}
+	if got := sessionName(f, second); got != "" {
+		t.Fatalf("the second agent starts with the name %q, want none", got)
+	}
+	secondName := strings.TrimPrefix(call(t, f.srv, second, "irc_name", `{}`), "you are ")
+	if secondName == firstName || !names.Valid(secondName) {
+		t.Fatalf("the second agent was named %q, the first %q", secondName, firstName)
+	}
+	if got := sessionName(f, first); got != firstName {
+		t.Fatalf("the first agent is now %q, was %q", got, firstName)
+	}
+
+	// After a daemon restart each shim sends the seat it was given, and gets its own name back in any order.
+	restarted := newServer(f.chat, mcp.New(serverName, "test", tools.All(f.chat)), testToken, "test",
+		func() error { return nil }, f.clock, func(string, ...any) {})
+	for _, tc := range []struct{ seat, want string }{{secondSeat, secondName}, {firstSeat, firstName}} {
+		rec := do(restarted, http.MethodPost, "/mcp", map[string]string{headerSeat: tc.seat, headerWatch: "1"},
+			initializeBody)
+		id := rec.Header().Get(headerSession)
+		restarted.mu.Lock()
+		got := restarted.sessions[id].Name
+		restarted.mu.Unlock()
+		if got != tc.want || rec.Header().Get(headerSeat) != tc.seat {
+			t.Fatalf("after a restart seat %q is %q in seat %q, want %q", tc.seat, got, rec.Header().Get(headerSeat), tc.want)
+		}
+	}
+}
+
+// A session counts as live only while its shim watches it (or for a moment after it attached). An agent that
+// restarts in its seat therefore gets its name back, however its old shim ended.
+func TestANameIsFreeAgainWhenItsWatchEnds(t *testing.T) {
+	f := boundFixture(t)
+	const seat = "@pc/tmux:%1"
+	first, _ := attach(t, f, seat, 100)
+	if got := call(t, f.srv, first, "irc_name", `{"name":"fox"}`); got != "you are fox" {
+		t.Fatal(got)
+	}
+	stop := watching(t, f, first)
+	f.clock.add(time.Hour) // long past the moment of grace: only the open watch keeps the name in use
+	if id, inForce := attach(t, f, seat, 200); sessionName(f, id) != "" || inForce == seat {
+		t.Fatalf("while fox is watched, another agent in its seat got name %q and seat %q", sessionName(f, id), inForce)
+	}
+	stop()
+	if got := sessionName(f, first); got != "<no session>" {
+		t.Fatalf("the session outlived its watch: %q", got)
+	}
+	f.clock.add(time.Hour)
+	id, inForce := attach(t, f, seat, 300)
+	if got := sessionName(f, id); got != "fox" || inForce != seat {
+		t.Fatalf("the restarted agent is %q in seat %q, want fox in %q", got, inForce, seat)
+	}
+
+	// A shim that announced a watch and never opened one is live for ten seconds only.
+	const other = "@pc/tmux:%2"
+	stale, _ := attach(t, f, other, 400)
+	if got := call(t, f.srv, stale, "irc_name", `{"name":"dog"}`); got != "you are dog" {
+		t.Fatal(got)
+	}
+	f.clock.add(9 * time.Second)
+	if id, _ := attach(t, f, other, 500); sessionName(f, id) != "" {
+		t.Fatal("inside the ten seconds the name is in use")
+	}
+	f.clock.add(2 * time.Second)
+	if id, _ := attach(t, f, other, 600); sessionName(f, id) != "dog" {
+		t.Fatalf("after the ten seconds the name is free, got %q", sessionName(f, id))
+	}
+}
+
+// A seat that agents with different names share says nothing about which of them a hook runs for.
+func TestASeatSharedByDifferentNamesIsSkipped(t *testing.T) {
+	f := boundFixture(t)
+	const seat = "@pc/cwd:/w"
+	fox, _ := attach(t, f, seat, 0)
+	if got := call(t, f.srv, fox, "irc_name", `{"name":"fox"}`); got != "you are fox" {
+		t.Fatal(got)
+	}
+	// One live agent: the seat is that agent.
+	sender := join(t, f, "owl", "@pc/tmux:%9", 0, "")
+	pm(t, f, sender, "fox", "one")
+	if got := delivered(t, f, `{"seat":"`+seat+`"}`); got != "pm owl: one" {
+		t.Fatalf("one agent in the seat: %q", got)
+	}
+	dog, _ := attach(t, f, seat, 0)
+	if got := call(t, f.srv, dog, "irc_name", `{"name":"dog"}`); got != "you are dog" {
+		t.Fatal(got)
+	}
+	pm(t, f, sender, "fox", "two")
+	pm(t, f, sender, "dog", "three")
+	if got := delivered(t, f, `{"seat":"`+seat+`","session":"hs-unknown"}`); got != "" {
+		t.Fatalf("two agents in the seat, and the hook was given %q", got)
+	}
+	f.srv.mu.Lock()
+	_, learned := f.srv.bound["hs-unknown"]
+	f.srv.mu.Unlock()
+	if learned {
+		t.Fatal("a session was bound from an ambiguous seat")
+	}
+	// Each is still found by what is its own.
+	if got := delivered(t, f, `{"seat":"`+seat+`","name":"dog"}`); got != "pm owl: three" {
+		t.Fatalf("dog by name: %q", got)
 	}
 }

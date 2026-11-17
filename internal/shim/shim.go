@@ -34,6 +34,7 @@ const (
 	errUnavailable = `{"code":-32000,"message":"mairc daemon unavailable"}`
 	healthPath     = "/healthz"
 	mcpPath        = "/mcp"
+	watchPath      = "/v1/watch"
 )
 
 // Run forwards messages until In reaches end of file or ctx is cancelled. It returns nil on end of
@@ -73,6 +74,7 @@ type shim struct {
 	down      bool   // daemon did not answer /healthz yet
 	sessionID string // last Mcp-Session-Id seen
 	initLine  []byte // the raw initialize request, for re-initializing after a daemon restart
+	stopWatch func() // ends the open watch, if any
 }
 
 // healthy reports whether GET /healthz answers within 500 ms.
@@ -134,6 +136,7 @@ func (s *shim) forward(ctx context.Context, line []byte) error {
 		}
 		s.takeSession(initResp)
 		_ = initResp.Body.Close()
+		s.watch(ctx)
 		resp, err = s.post(ctx, line, isInit)
 	}
 	if err != nil {
@@ -143,6 +146,8 @@ func (s *shim) forward(ctx context.Context, line []byte) error {
 	if isInit && resp.StatusCode == http.StatusOK {
 		s.sessionID = resp.Header.Get("Mcp-Session-Id")
 		s.initLine = append([]byte(nil), line...)
+		s.takeSeat(resp)
+		s.watch(ctx)
 	}
 	switch resp.StatusCode {
 	case http.StatusOK:
@@ -174,6 +179,7 @@ func (s *shim) post(ctx context.Context, body []byte, isInit bool) (*http.Respon
 		if s.o.Session != "" {
 			req.Header.Set("X-Mairc-Session", s.o.Session)
 		}
+		req.Header.Set("X-Mairc-Watch", "1") // a watch follows (see watch)
 	}
 	if s.sessionID != "" {
 		req.Header.Set("Mcp-Session-Id", s.sessionID)
@@ -186,6 +192,48 @@ func (s *shim) takeSession(resp *http.Response) {
 	if id := resp.Header.Get("Mcp-Session-Id"); id != "" {
 		s.sessionID = id
 	}
+	s.takeSeat(resp)
+}
+
+// takeSeat remembers the seat the daemon put in force for this session. When another agent already uses the name
+// of the seat we sent, the daemon gives this session a seat of its own; sending that one when initializing again
+// (after a daemon restart) gets this agent its own name back.
+func (s *shim) takeSeat(resp *http.Response) {
+	if seat := resp.Header.Get("X-Mairc-Seat"); seat != "" {
+		s.o.Seat = seat
+	}
+}
+
+// watch holds one request open on the daemon for as long as this shim runs with the session: the daemon takes the
+// open connection as proof that the agent is still there, and drops the session the moment it closes, however this
+// process ends. A watch for an earlier session is ended first. A daemon that does not know the endpoint (an older
+// one) answers at once and nothing more happens.
+func (s *shim) watch(ctx context.Context) {
+	if s.stopWatch != nil {
+		s.stopWatch()
+		s.stopWatch = nil
+	}
+	if s.sessionID == "" {
+		return
+	}
+	wctx, cancel := context.WithCancel(ctx)
+	s.stopWatch = cancel
+	req, err := http.NewRequestWithContext(wctx, http.MethodGet, s.o.BaseURL+watchPath, http.NoBody)
+	if err != nil {
+		return
+	}
+	req.Header.Set("Authorization", "Bearer "+s.o.Token)
+	req.Header.Set("Mcp-Session-Id", s.sessionID)
+	// The same transport as every other request, but without the client's overall time limit.
+	client := &http.Client{Transport: s.client.Transport}
+	go func() {
+		resp, err := client.Do(req)
+		if err != nil {
+			return
+		}
+		_, _ = io.Copy(io.Discard, resp.Body)
+		_ = resp.Body.Close()
+	}()
 }
 
 // unavailable answers a request with the -32000 error; a notification gets nothing.

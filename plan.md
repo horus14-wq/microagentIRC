@@ -104,6 +104,9 @@ An agent has a **name**: `^[a-z][a-z0-9_-]{1,23}$`, unique, and not `room`, `all
   the name the first time it resolves and uses the binding from then on, also after a daemon restart. When the
   hook sees the result of the agent's own `irc_name` call, it claims that name for its session, which separates
   agents that share a folder, a terminal and a parent process with no setup.
+- **Several agents in one seat (bead `mairc-648`):** a shim holds a watch connection open, so the daemon knows
+  which sessions are live. A second live session in a seat gets a seat of its own and its own name; a seat shared
+  by different names is skipped when resolving a hook, like a shared process id.
 - **HTTP-transport agents** have no shim: the daemon binds the name to the `Mcp-Session-Id` it issued, and the
   hook is run as `mairc hook --name <name>` (or with `$MAIRC_NAME`).
 - **No name yet:** tools other than `irc_name` answer `no name: call irc_name`. The hook stays silent, except on
@@ -171,6 +174,7 @@ Recommended wiring (what `mairc install` writes for Claude Code): `SessionStart`
   - `POST /v1/hook` — §7.
   - `POST /v1/reload` — re-read `config.json`.
   - `GET /v1/status` — `{"version","uptime_s","agents","sessions"}` for `mairc status`.
+  - `GET /v1/watch` — held open by each shim; its end drops the shim's session (bead `mairc-648`).
   - `GET /healthz` — `ok`.
 - **MCP subset**, protocol version `2025-06-18`: `initialize`, `notifications/initialized`, `ping`,
   `tools/list`, `tools/call`. Anything else: JSON-RPC error `-32601`. Implemented directly on `encoding/json`

@@ -47,6 +47,14 @@ Sessions live in daemon memory only:
   from inside another CLI inherits the outer one's variable and must not take over its hook.
 - A session that names itself with `irc_name` keeps the name for later calls.
 - A session unused for more than 24 h is dropped (checked once a minute).
+- A shim also sends `X-Mairc-Watch: 1` on `initialize` and then holds `GET /v1/watch` open. A session is **known
+  to be live** while it is watched, and for 10 seconds after an `initialize` that announced a watch.
+- **Several agents in one seat.** When a session known to be live is already attached from the seat an
+  `initialize` sends, or is using the name remembered for that seat, the new session is a second agent in the same
+  place: the daemon gives it a seat of its own (the seat it sent, `#` and 8 hexadecimal characters) and it starts
+  without a name. The `initialize` response carries the seat in force as `X-Mairc-Seat`; the shim sends that seat
+  when it initializes again, so after a daemon restart each agent gets its own name back. Clients that never
+  watch are never known to be live, and for them a seat keeps meaning one agent, as before.
 
 ### `POST /v1/hook`
 
@@ -72,8 +80,11 @@ The agent is the first that applies:
    `X-Mairc-Pid` was that pid **on the same machine** (the machine is the host part of the seat; a request and a
    shim that both name no machine also match). A pid reported by sessions with **different** names is ambiguous
    and skipped;
-5. the name remembered for `seat`. A seat with a machine that has no name also tries the same seat without the
-   machine (the form before version 0.1.0 named machines), and moves a name found there to the new form.
+5. the seat: the name of the sessions attached from `seat` (a session with a seat of its own counts for the seat
+   its shim sent). Sessions there with **different** names make the seat ambiguous and it is skipped. With no
+   named session there, the name remembered for `seat`; a seat with a machine that has no name also tries the same
+   seat without the machine (the form before version 0.1.0 named machines), and moves a name found there to the
+   new form.
 
 **Learning.** A request that carries a `session` and is resolved by rule 4 or 5 binds that session to the name.
 From then on rule 3 resolves it, whatever its process chain and seat become. A bound session is never re-bound by
@@ -135,3 +146,11 @@ next start.
 
 `uptime_s` is whole seconds since start, `agents` the names seen within `keep_hours` (as `irc_who` lists them, at
 most 50), `sessions` the live MCP sessions.
+
+### `GET /v1/watch`
+
+Held open by a shim for as long as it runs, with `Mcp-Session-Id`. Without the header: `400`. With an unknown id:
+`404`. Otherwise `200` and a body that never sends anything; the server's read and write time limits do not apply
+to it. When the last watch of a session ends (the shim exited, was killed, or lost its connection) the session is
+dropped at once: its name is no longer in use and its process id no longer resolves hooks. A shim that is still
+running initializes again on its next call. A daemon shutdown ends every watch.

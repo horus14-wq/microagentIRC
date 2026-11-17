@@ -39,9 +39,13 @@ const (
 	headerPid     = "X-Mairc-Pid"
 	// headerHookSession is the agent CLI's own session id, when the shim's environment has one.
 	headerHookSession = "X-Mairc-Session"
+	// headerWatch is "1" on an initialize whose shim is about to open a watch (GET /v1/watch).
+	headerWatch = "X-Mairc-Watch"
 )
 
 const (
+	// watchGrace is how long after such an initialize the session counts as live before its watch has arrived.
+	watchGrace = 10 * time.Second
 	// claimWindow is how long after an irc_name call a hook may claim the name that call gave.
 	claimWindow = 60 * time.Second
 	// bindingIdle is how long an unused hook-session binding is kept.
@@ -56,6 +60,15 @@ type session struct {
 	pid         int
 	hookSession string // the agent CLI's session id the shim reported, or ""
 	lastUsed    time.Time
+	// A session is known to be live while a shim watches it (serveWatch), and for watchGrace after an initialize
+	// that announced a watch. Sessions of clients that never watch are not known to be live.
+	watchers int
+	grace    time.Time
+}
+
+// live reports whether the session's agent is known to be there now. Callers hold mu.
+func (sess *session) live(now time.Time) bool {
+	return sess.watchers > 0 || now.Before(sess.grace)
 }
 
 // pidKey is a shim's process id on one machine. The machine comes from the session's seat ("" for a client that
@@ -90,7 +103,11 @@ type server struct {
 	pids map[pidKey]map[string]int
 	// bound maps an agent CLI session id to the name its hook runs for. It is learned (from a process id, a seat
 	// or the result of irc_name), kept in memory for the hot path and stored through bindings.
-	bound map[string]*binding
+	attach sync.Mutex // serializes newSession; taken before mu, never while holding it
+	// stopping is closed when the daemon shuts down, to end the open watches.
+	stopping chan struct{}
+	stopOnce sync.Once
+	bound    map[string]*binding
 	// named is when irc_name last set or confirmed each name, for the claim window.
 	named    map[string]time.Time
 	bindings core.Bindings // nil: bindings live in memory only
@@ -123,6 +140,7 @@ func newServer(chat core.Chat, mcpServer *mcp.Server, token, version string, rel
 		pids:     make(map[pidKey]map[string]int),
 		bound:    make(map[string]*binding),
 		named:    make(map[string]time.Time),
+		stopping: make(chan struct{}),
 	}
 }
 
@@ -171,6 +189,10 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case "/v1/status":
 		if method(w, r, http.MethodGet) {
 			s.serveStatus(w, r)
+		}
+	case "/v1/watch":
+		if method(w, r, http.MethodGet) {
+			s.serveWatch(w, r)
 		}
 	default:
 		w.WriteHeader(http.StatusNotFound)
@@ -221,6 +243,9 @@ func (s *server) serveMCP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		w.Header().Set(headerSession, id)
+		if sess.Seat != "" {
+			w.Header().Set(headerSeat, sess.Seat) // the seat in force, which may be the session's own
+		}
 	} else {
 		id = r.Header.Get(headerSession)
 		if id == "" {
@@ -253,6 +278,51 @@ func (s *server) serveMCP(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_, _ = w.Write(out)
+}
+
+// serveWatch serves GET /v1/watch: a shim holds this request open for as long as it runs, which is how the daemon
+// knows the session's agent is still there. Nothing is ever sent on it. When the last watch of a session ends (the
+// shim exited, was killed, or lost its connection) the session is dropped at once: its name stops counting as in
+// use and its process id stops resolving hooks. A shim that is still running initializes again on its next call.
+func (s *server) serveWatch(w http.ResponseWriter, r *http.Request) {
+	id := r.Header.Get(headerSession)
+	if id == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+	s.mu.Lock()
+	sess := s.sessions[id]
+	if sess != nil {
+		sess.watchers++
+	}
+	s.mu.Unlock()
+	if sess == nil {
+		w.WriteHeader(http.StatusNotFound)
+		return
+	}
+	// This one response has no end, so the server's read and write limits must not apply to it.
+	rc := http.NewResponseController(w)
+	_ = rc.SetReadDeadline(time.Time{})
+	_ = rc.SetWriteDeadline(time.Time{})
+	w.Header().Set("Content-Type", "application/octet-stream")
+	w.WriteHeader(http.StatusOK)
+	_ = rc.Flush()
+	select {
+	case <-r.Context().Done():
+	case <-s.stopping:
+	}
+	s.mu.Lock()
+	sess.watchers--
+	if sess.watchers == 0 && s.sessions[id] == sess {
+		s.index(sess, -1)
+		delete(s.sessions, id)
+	}
+	s.mu.Unlock()
+}
+
+// stop ends every open watch, so that a shutdown does not wait for them. It may be called more than once.
+func (s *server) stop() {
+	s.stopOnce.Do(func() { close(s.stopping) })
 }
 
 // isInitialize reports whether the body is an initialize request (a method and an id).
@@ -293,10 +363,34 @@ func (s *server) newSession(r *http.Request) (string, core.Session, error) {
 	if hookSession := r.Header.Get(headerHookSession); identity.ValidSession(hookSession) {
 		sess.hookSession = hookSession
 	}
+	if r.Header.Get(headerWatch) == "1" {
+		sess.grace = now.Add(watchGrace)
+	}
+	// One attach at a time: two agents arriving together from one seat must not both be given its name.
+	s.attach.Lock()
+	defer s.attach.Unlock()
 	if sess.Seat != "" {
 		name, err := s.nameForSeat(r.Context(), sess.Seat)
 		if err != nil {
 			return "", core.Session{}, err
+		}
+		s.mu.Lock()
+		taken := false
+		for _, other := range s.sessions {
+			if other.live(now) && (other.Seat == sess.Seat || (name != "" && other.Name == name)) {
+				taken = true
+				break
+			}
+		}
+		s.mu.Unlock()
+		if taken {
+			// A session known to be live is attached from this seat (it may not have a name yet: agent CLIs
+			// started together attach before any of them calls irc_name) or is using the seat's name, so this is
+			// a second agent in the same place.
+			// It gets a seat of its own and starts without a name; irc_name then gives it one that is remembered
+			// for that seat. The shim is told the seat and sends it again after a daemon restart.
+			sess.Seat = identity.OwnSeat(sess.Seat, id)
+			name = ""
 		}
 		sess.Name = name
 	}
@@ -575,9 +669,17 @@ func (s *server) resolve(ctx context.Context, req hookRequest) (string, error) {
 	}
 	name := s.nameForPids(identity.HostOf(req.Seat), req.Pids)
 	if name == "" && req.Seat != "" {
-		var err error
-		if name, err = s.nameForSeat(ctx, req.Seat); err != nil {
-			return "", err
+		live, several := s.liveNameForSeat(req.Seat)
+		switch {
+		case several:
+			// Agents with different names share this seat: like a shared process id, it is ambiguous and skipped.
+		case live != "":
+			name = live
+		default:
+			var err error
+			if name, err = s.nameForSeat(ctx, req.Seat); err != nil {
+				return "", err
+			}
 		}
 	}
 	if name != "" && hookSession != "" {
@@ -585,6 +687,24 @@ func (s *server) resolve(ctx context.Context, req hookRequest) (string, error) {
 		s.bind(ctx, hookSession, name, now)
 	}
 	return name, nil
+}
+
+// liveNameForSeat looks at the live sessions attached from the seat (a hook sends the seat its shim sent, before
+// the daemon made it the session's own). It returns their name when they all have the same one, and several =
+// true when they have different names.
+func (s *server) liveNameForSeat(seat string) (name string, several bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, sess := range s.sessions {
+		if sess.Name == "" || identity.SharedSeat(sess.Seat) != seat {
+			continue
+		}
+		if name != "" && name != sess.Name {
+			return "", true
+		}
+		name = sess.Name
+	}
+	return name, false
 }
 
 // boundName returns the name the agent CLI session is bound to, or "". It runs no SQL except to refresh the stored
