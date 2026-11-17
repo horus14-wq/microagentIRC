@@ -42,7 +42,7 @@ type hookSpec struct {
 
 // clis returns the supported CLIs in the order they are reported.
 func clis() []cliSpec {
-	return []cliSpec{claudeCode(), codex(), grok(), devin(), primeAgent()}
+	return []cliSpec{claudeCode(), codex(), grok(), devin(), openCode(), primeAgent()}
 }
 
 // tomlServerBlock is the marked [mcp_servers.mairc] block for a TOML config.
@@ -116,7 +116,8 @@ func devin() cliSpec {
 
 // primeAgent is Prime Agent (docs/compat.md, "Prime Agent", 0.10.0): MCP servers in ~/.prime/agent/settings.json or
 // <project>/.prime/agent/settings.json, key mcpServers, with an explicit "type":"stdio". It has no hook system, so
-// mail reaches it only when the agent calls irc_read (the fallback, mairc-hd5).
+// mail reaches it only when the agent calls irc_read: at user scope the fallback snippet (skill/fallback.md,
+// mairc-hd5) goes into its global ~/.prime/agent/AGENTS.md.
 func primeAgent() cliSpec {
 	return cliSpec{
 		name:     "prime-agent",
@@ -127,14 +128,71 @@ func primeAgent() cliSpec {
 			if scope == "project" {
 				base = o.Project
 			}
-			return []fileSpec{{
+			files := []fileSpec{{
 				path: filepath.Join(base, ".prime", "agent", "settings.json"), format: "json",
 				server: &entrySpec{keyPath: []string{"mcpServers"}, name: "mairc", value: func(binary string) *node {
 					return object("type", str("stdio"), "command", str(binary), "args", array(str("stdio")))
 				}},
 			}}
+			if scope == "user" {
+				files = append(files, instructionFile(filepath.Join(o.Home, ".prime", "agent", "AGENTS.md"),
+					primeAgentFallback))
+			}
+			return files
 		},
 	}
+}
+
+// openCode is OpenCode (docs/compat.md, "OpenCode", 1.19.3): MCP servers in ~/.config/opencode/opencode.json(c) (or
+// <project>/opencode.json(c)), key mcp -> {name: {type: "local", command: [...]}}. The existing .jsonc file is used
+// when there is one; one with comments is refused rather than rewritten (the JSON writer would drop them). OpenCode
+// has no shell hook, so at user scope the fallback snippet goes into ~/.config/opencode/AGENTS.md.
+func openCode() cliSpec {
+	return cliSpec{
+		name:     "opencode",
+		binaries: []string{"opencode"},
+		dirs:     []string{filepath.Join(".config", "opencode")},
+		files: func(scope string, o Options) []fileSpec {
+			dir := filepath.Join(o.Home, ".config", "opencode")
+			if scope == "project" {
+				dir = o.Project
+			}
+			config := filepath.Join(dir, "opencode.json")
+			if _, err := os.Stat(filepath.Join(dir, "opencode.jsonc")); err == nil {
+				config = filepath.Join(dir, "opencode.jsonc")
+			}
+			files := []fileSpec{{path: config, format: "json", server: &entrySpec{
+				keyPath: []string{"mcp"}, name: "mairc", value: func(binary string) *node {
+					return object("type", str("local"), "command", array(str(binary), str("stdio")))
+				},
+			}}}
+			if scope == "user" {
+				files = append(files, instructionFile(filepath.Join(o.Home, ".config", "opencode", "AGENTS.md"),
+					openCodeFallback))
+			}
+			return files
+		},
+	}
+}
+
+// The fallback instruction snippets, verbatim from skill/fallback.md (TestFallbackSnippetsMatchSkill keeps them so).
+const (
+	openCodeFallback = "## Chat (mairc)\n" +
+		"Call `irc_read` once at the start of each task and once after each batch of tool calls. Never call it in a loop\n" +
+		"or twice in a row. `nothing new` means there is nothing to do; carry on with your task.\n"
+	primeAgentFallback = "## Chat (mairc)\n" +
+		"Read chat with `print(mcp.call_tool(\"mairc\", \"irc_read\", {}))` once at the start of each task and once after each\n" +
+		"batch of tool calls. Never in a loop or twice in a row. `nothing new` means there is nothing to do.\n" +
+		"Send with `print(mcp.call_tool(\"mairc\", \"irc_send\", {\"text\": \"...\", \"to\": \"name\"}))`; omit \"to\" for the room.\n"
+)
+
+// instructionFile is a marked markdown block in an agent's instruction file.
+func instructionFile(path, snippet string) fileSpec {
+	return fileSpec{path: path, format: "block", block: &blockSpec{
+		begin: "<!-- mairc: begin (managed by `mairc install`; edits inside are replaced) -->",
+		end:   "<!-- mairc: end -->",
+		body:  func(string) string { return snippet },
+	}}
 }
 
 // claudeCode is Claude Code (docs/compat.md, "Claude Code"; checked against code.claude.com/docs/en/mcp and /hooks

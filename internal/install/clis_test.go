@@ -197,7 +197,11 @@ func TestEveryRowMergesIdempotentlyAndUninstallsExactly(t *testing.T) {
 				}
 				for _, f := range files {
 					got := string(read(t, f.path))
-					if !strings.HasPrefix(got, fixtures[f.format].keptPrefix) || !strings.Contains(got, testBinary) {
+					mark := testBinary // instruction blocks name no binary: their marker is the evidence
+					if f.block != nil {
+						mark = f.block.begin
+					}
+					if !strings.HasPrefix(got, fixtures[f.format].keptPrefix) || !strings.Contains(got, mark) {
 						t.Fatalf("%s lost the fixture or lacks mairc:\n%s", f.path, got)
 					}
 				}
@@ -306,5 +310,66 @@ func TestTOMLRowsWriteTheBlock(t *testing.T) {
 		if got := string(read(t, filepath.Join(home, tc.rel))); got != want {
 			t.Fatalf("%s:\n%s", tc.rel, got)
 		}
+	}
+}
+
+// The fallback snippets the installer writes are the ones skill/fallback.md documents, verbatim.
+func TestFallbackSnippetsMatchSkill(t *testing.T) {
+	skill := string(read(t, filepath.Join("..", "..", "skill", "fallback.md")))
+	for name, snippet := range map[string]string{"opencode": openCodeFallback, "prime-agent": primeAgentFallback} {
+		if !strings.Contains(skill, "```markdown\n"+snippet+"```") {
+			t.Fatalf("the %s snippet is not in skill/fallback.md verbatim:\n%s", name, snippet)
+		}
+	}
+}
+
+// At user scope the no-hook CLIs get the fallback snippet in their own instruction file; the block is removed again
+// by uninstall, and a project scope never writes a shared AGENTS.md.
+func TestNoHookRowsWriteTheFallbackSnippet(t *testing.T) {
+	for _, tc := range []struct{ cli, rel, snippet string }{
+		{"opencode", filepath.Join(".config", "opencode", "AGENTS.md"), openCodeFallback},
+		{"prime-agent", filepath.Join(".prime", "agent", "AGENTS.md"), primeAgentFallback},
+	} {
+		home, project := t.TempDir(), t.TempDir()
+		agents := filepath.Join(home, tc.rel)
+		write(t, agents, "# My rules\nBe brief.\n", 0o600)
+		if code, out := runRaw(Options{Binary: testBinary, Home: home, Only: []string{tc.cli}}); code != 0 {
+			t.Fatalf("%s install = %d, %q", tc.cli, code, out)
+		}
+		got := string(read(t, agents))
+		if !strings.HasPrefix(got, "# My rules\nBe brief.\n\n<!-- mairc: begin") || !strings.Contains(got, tc.snippet) {
+			t.Fatalf("%s:\n%s", agents, got)
+		}
+		runRaw(Options{Binary: testBinary, Home: home, Only: []string{tc.cli}, Uninstall: true})
+		if got := string(read(t, agents)); got != "# My rules\nBe brief.\n" {
+			t.Fatalf("%s after uninstall: %q", agents, got)
+		}
+		runRaw(Options{Binary: testBinary, Scope: "project", Home: home, Project: project, Only: []string{tc.cli}})
+		if _, err := os.Stat(filepath.Join(project, "AGENTS.md")); err == nil {
+			t.Fatalf("%s project scope wrote a shared AGENTS.md", tc.cli)
+		}
+	}
+}
+
+// OpenCode's entry, and its .jsonc file preferred when it exists.
+func TestOpenCodeRow(t *testing.T) {
+	home := t.TempDir()
+	if code, out := runRaw(Options{Binary: testBinary, Home: home, Only: []string{"opencode"}}); code != 0 {
+		t.Fatalf("install = %d, %q", code, out)
+	}
+	want := "{\n  \"mcp\": {\n    \"mairc\": {\n      \"type\": \"local\",\n      \"command\": [\n        \"" + testBinary +
+		"\",\n        \"stdio\"\n      ]\n    }\n  }\n}\n"
+	if got := string(read(t, filepath.Join(home, ".config", "opencode", "opencode.json"))); got != want {
+		t.Fatalf("opencode.json:\n%s", got)
+	}
+	withJSONC := t.TempDir()
+	jsonc := filepath.Join(withJSONC, ".config", "opencode", "opencode.jsonc")
+	write(t, jsonc, "{\n  // my comment\n  \"theme\": \"dark\"\n}\n", 0o600)
+	code, out := runRaw(Options{Binary: testBinary, Home: withJSONC, Only: []string{"opencode"}})
+	if code != 1 || !strings.Contains(out, "cannot parse "+jsonc) {
+		t.Fatalf("a commented .jsonc must be refused, got %d %q", code, out)
+	}
+	if got := string(read(t, jsonc)); !strings.Contains(got, "// my comment") {
+		t.Fatal("the commented .jsonc was rewritten")
 	}
 }
