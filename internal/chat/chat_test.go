@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -239,8 +240,6 @@ func (f *fakeStore) Close() error { return nil }
 
 // ---- helpers ----
 
-var ctx = context.Background()
-
 func seqRand() func(int) int {
 	var i int
 	return func(n int) int { i++; return i % n }
@@ -248,6 +247,7 @@ func seqRand() func(int) int {
 
 func setup(t testing.TB, set core.Settings, names ...string) (*Service, *fakeStore, *fakeClock) {
 	t.Helper()
+	ctx := t.Context()
 	st := newFakeStore()
 	clk := &fakeClock{now: time.Date(2026, 11, 17, 9, 0, 0, 0, time.UTC)}
 	for i, n := range names {
@@ -255,7 +255,7 @@ func setup(t testing.TB, set core.Settings, names ...string) (*Service, *fakeSto
 			t.Fatal(err)
 		}
 	}
-	return New(st, clk, set, seqRand()), st, clk
+	return New(ctx, st, clk, set, seqRand()), st, clk
 }
 
 func noCooldown() core.Settings {
@@ -304,7 +304,7 @@ func TestSendRulesInOrderWithExactTexts(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			s, _, _ := setup(t, c.set, "alice", "bob")
-			err := s.Send(ctx, c.from, c.to, c.text)
+			err := s.Send(t.Context(), c.from, c.to, c.text)
 			if err == nil || err.Error() != c.want || !errors.Is(err, c.is) {
 				t.Fatalf("got %v, want %q (is %v)", err, c.want, c.is)
 			}
@@ -313,6 +313,7 @@ func TestSendRulesInOrderWithExactTexts(t *testing.T) {
 }
 
 func TestSendUnknownNamesInOrderGiven(t *testing.T) {
+	ctx := t.Context()
 	s, _, _ := setup(t, noCooldown(), "alice")
 	err := s.Send(ctx, "alice", []string{"bob", "carol"}, "hi")
 	if err == nil || err.Error() != "unknown: bob,carol" || !errors.Is(err, core.ErrUnknown) {
@@ -321,6 +322,7 @@ func TestSendUnknownNamesInOrderGiven(t *testing.T) {
 }
 
 func TestSendCleansAndCountsRunes(t *testing.T) {
+	ctx := t.Context()
 	s, st, _ := setup(t, noCooldown(), "alice")
 	if err := s.Send(ctx, "alice", nil, "a\n\tb  "); err != nil {
 		t.Fatal(err)
@@ -338,6 +340,7 @@ func TestSendCleansAndCountsRunes(t *testing.T) {
 }
 
 func TestSendCooldown(t *testing.T) {
+	ctx := t.Context()
 	s, st, clk := setup(t, core.DefaultSettings(), "alice", "bob")
 	if err := s.Send(ctx, "alice", nil, "one"); err != nil {
 		t.Fatal(err)
@@ -367,6 +370,7 @@ func TestSendCooldown(t *testing.T) {
 }
 
 func TestSendMultiRecipientIsOneSend(t *testing.T) {
+	ctx := t.Context()
 	s, st, _ := setup(t, core.DefaultSettings(), "alice", "bob", "carol")
 	if err := s.Send(ctx, "alice", []string{"bob", "Carol", "bob"}, "hi"); err != nil {
 		t.Fatal(err)
@@ -380,9 +384,10 @@ func TestSendMultiRecipientIsOneSend(t *testing.T) {
 }
 
 func TestZeroCooldownNeverRefuses(t *testing.T) {
+	ctx := t.Context()
 	s, _, _ := setup(t, noCooldown(), "alice")
 	for i := range 5 {
-		if err := s.Send(ctx, "alice", nil, fmt.Sprint(i)); err != nil {
+		if err := s.Send(ctx, "alice", nil, strconv.Itoa(i)); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -391,6 +396,7 @@ func TestZeroCooldownNeverRefuses(t *testing.T) {
 // ---- SetName ----
 
 func TestSetName(t *testing.T) {
+	ctx := t.Context()
 	s, st, _ := setup(t, noCooldown())
 	got, err := s.SetName(ctx, "", "seatA")
 	if err != nil || !names.Valid(got) {
@@ -424,6 +430,7 @@ func TestSetName(t *testing.T) {
 // ---- Read ----
 
 func TestReadPrivateFirstThenRoomAndMovesCursor(t *testing.T) {
+	ctx := t.Context()
 	s, st, _ := setup(t, noCooldown(), "alice", "bob")
 	for i := range 12 {
 		if err := s.Send(ctx, "bob", nil, fmt.Sprint("r", i)); err != nil {
@@ -453,6 +460,7 @@ func TestReadPrivateFirstThenRoomAndMovesCursor(t *testing.T) {
 }
 
 func TestReadDoesNotLoseAPrivateMessageSentDuringTheRead(t *testing.T) {
+	ctx := t.Context()
 	s, st, _ := setup(t, noCooldown(), "alice", "bob")
 	_, _ = s.HookEvent(ctx, "alice") // alice's hook state is in memory
 	if err := s.Send(ctx, "bob", []string{"alice"}, "first"); err != nil {
@@ -477,6 +485,7 @@ func TestReadDoesNotLoseAPrivateMessageSentDuringTheRead(t *testing.T) {
 }
 
 func TestSendSucceedsAndUpdatesHookStateWhenPruneFails(t *testing.T) {
+	ctx := t.Context()
 	set := noCooldown()
 	set.CheckRoomEvery = 1
 	s, st, _ := setup(t, set, "alice", "bob")
@@ -494,6 +503,7 @@ func TestSendSucceedsAndUpdatesHookStateWhenPruneFails(t *testing.T) {
 // ---- Who ----
 
 func TestWhoRecentFirst(t *testing.T) {
+	ctx := t.Context()
 	s, st, clk := setup(t, noCooldown(), "alice", "bob")
 	clk.add(time.Minute)
 	_ = st.Touch(ctx, "bob", clk.Now())
@@ -506,6 +516,7 @@ func TestWhoRecentFirst(t *testing.T) {
 // ---- HookEvent ----
 
 func TestHookDefaultsPrivateNextEventRoomEveryTenth(t *testing.T) {
+	ctx := t.Context()
 	s, _, _ := setup(t, noCooldown(), "alice", "bob")
 	if err := s.Send(ctx, "bob", []string{"alice"}, "pm1"); err != nil {
 		t.Fatal(err)
@@ -534,6 +545,7 @@ func TestHookDefaultsPrivateNextEventRoomEveryTenth(t *testing.T) {
 }
 
 func TestHookCheckPrivateEveryThree(t *testing.T) {
+	ctx := t.Context()
 	set := noCooldown()
 	set.CheckPrivateEvery = 3
 	s, _, _ := setup(t, set, "alice", "bob")
@@ -551,6 +563,7 @@ func TestHookCheckPrivateEveryThree(t *testing.T) {
 }
 
 func TestHookNeverDeliversOwnRoomLines(t *testing.T) {
+	ctx := t.Context()
 	set := noCooldown()
 	set.CheckRoomEvery = 1
 	s, _, _ := setup(t, set, "alice")
@@ -563,6 +576,7 @@ func TestHookNeverDeliversOwnRoomLines(t *testing.T) {
 }
 
 func TestReadAfterHookShowsRoomAsHistoryAndNoPrivate(t *testing.T) {
+	ctx := t.Context()
 	set := noCooldown()
 	set.CheckRoomEvery = 1
 	s, _, _ := setup(t, set, "alice", "bob")
@@ -578,6 +592,7 @@ func TestReadAfterHookShowsRoomAsHistoryAndNoPrivate(t *testing.T) {
 }
 
 func TestReadClearsHookStateSoNothingIsRedelivered(t *testing.T) {
+	ctx := t.Context()
 	set := noCooldown()
 	set.CheckRoomEvery = 1
 	s, _, _ := setup(t, set, "alice", "bob")
@@ -593,6 +608,7 @@ func TestReadClearsHookStateSoNothingIsRedelivered(t *testing.T) {
 }
 
 func TestHookUnnamedGetsNothing(t *testing.T) {
+	ctx := t.Context()
 	s, st, _ := setup(t, noCooldown())
 	before := st.calls.Load()
 	if got, err := s.HookEvent(ctx, ""); got != nil || err != nil {
@@ -604,6 +620,7 @@ func TestHookUnnamedGetsNothing(t *testing.T) {
 }
 
 func TestHookZeroCostWhenNothingIsDue(t *testing.T) {
+	ctx := t.Context()
 	s, st, clk := setup(t, core.DefaultSettings(), "alice")
 	_, _ = s.HookEvent(ctx, "alice") // first sight loads state and touches
 	before := st.calls.Load()
@@ -626,6 +643,7 @@ func TestHookZeroCostWhenNothingIsDue(t *testing.T) {
 // ---- Reload ----
 
 func TestReloadChangesLimitsImmediately(t *testing.T) {
+	ctx := t.Context()
 	s, _, _ := setup(t, noCooldown(), "alice")
 	set := noCooldown()
 	set.MaxPublicLen = 3
@@ -638,6 +656,7 @@ func TestReloadChangesLimitsImmediately(t *testing.T) {
 // ---- concurrency ----
 
 func TestConcurrentSendReadHook(t *testing.T) {
+	ctx := t.Context()
 	s, _, _ := setup(t, noCooldown(), "a0", "a1", "a2", "a3", "a4", "a5", "a6", "a7")
 	var wg sync.WaitGroup
 	for g := range 8 {
@@ -664,6 +683,7 @@ func TestConcurrentSendReadHook(t *testing.T) {
 }
 
 func BenchmarkHookEventEmpty(b *testing.B) {
+	ctx := b.Context()
 	s, _, _ := setup(b, core.DefaultSettings(), "alice")
 	_, _ = s.HookEvent(ctx, "alice")
 	b.ReportAllocs()

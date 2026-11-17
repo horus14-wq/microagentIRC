@@ -58,7 +58,7 @@ type Service struct {
 var _ core.Chat = (*Service)(nil)
 
 // New returns the rule layer. rnd(n) returns a number in [0, n) and feeds name generation.
-func New(store core.Store, clock core.Clock, settings core.Settings, rnd func(n int) int) *Service {
+func New(ctx context.Context, store core.Store, clock core.Clock, settings core.Settings, rnd func(n int) int) *Service {
 	s := &Service{
 		store:    store,
 		clock:    clock,
@@ -67,7 +67,7 @@ func New(store core.Store, clock core.Clock, settings core.Settings, rnd func(n 
 		agents:   make(map[string]*agentState),
 	}
 	// A failed read leaves 0: the next room send raises it again.
-	if id, err := store.MaxRoomID(context.Background()); err == nil {
+	if id, err := store.MaxRoomID(ctx); err == nil {
 		s.maxRoomID = id
 	}
 	return s
