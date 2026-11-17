@@ -45,11 +45,14 @@ func TestPlatformHookPathsAndMerge(t *testing.T) {
 					t.Fatal(err)
 				}
 				original := root.bytes()
-				edit := hooksEdit(tc.binary, false)
-				remove := hooksEdit(tc.binary, true)
+				// mairc-x2y: the Claude row's two files through the generic JSON writer (formerly hooksEdit/mcpEdit).
+				claudeFiles := claudeCode().files("user", Options{Home: t.TempDir()})
+				spec := claudeFiles[1]
 				if content == otherMCP {
-					edit, remove = mcpEdit(tc.binary, false), mcpEdit(tc.binary, true)
+					spec = claudeFiles[0]
 				}
+				edit := func(r *node) (bool, bool) { return applyJSON(r, spec, tc.binary, false) }
+				remove := func(r *node) (bool, bool) { return applyJSON(r, spec, tc.binary, true) }
 				if changed, ok := edit(root); !changed || !ok || !json.Valid(root.bytes()) {
 					t.Fatal("first merge must produce valid JSON")
 				}
