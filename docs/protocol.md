@@ -73,8 +73,10 @@ when it has none.
 The agent is the first that applies:
 
 1. a non-empty `name`;
-2. `claimed`, when the request has a `session` and `irc_name` set or confirmed exactly that name in the last 60
-   seconds. The session is bound to the name, and any other CLI session bound to that name is released;
+2. `claimed`, when the request has a `session`, `irc_name` set or confirmed exactly that name in the last 60
+   seconds, and the request comes from the agent that made that call: `pids` holds the process id that session's
+   shim reported, on the same machine; or, when either side has no process id, `seat` is that session's seat. The
+   session is bound to the name, and any other CLI session bound to that name is released;
 3. the name `session` is bound to;
 4. for each of `pids` in the order given (nearest ancestor first), the name of the live sessions whose
    `X-Mairc-Pid` was that pid **on the same machine** (the machine is the host part of the seat; a request and a
@@ -105,7 +107,7 @@ daemon therefore never share a seat or a process id.
 |---|---|---|
 | event | `hook_event_name` | the `--event` flag wins |
 | `session` | `session_id`, `sessionId`, `conversationId` | else the environment variables listed for the shim |
-| `claimed` | `tool_name` ending in `irc_name` and a `tool_response` holding a text that is exactly `you are <name>` | none |
+| `claimed` | `tool_name` that is `irc_name`, or `irc_name` after a prefix that names `mairc` and ends in a separator (`mcp__mairc__irc_name`), and a `tool_response` holding a text that is exactly `you are <name>` | none |
 
 A CLI that gives its hooks none of these still works by rules 4 and 5, as before.
 

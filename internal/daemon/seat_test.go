@@ -205,7 +205,7 @@ func TestTheNameIsClaimedFromTheIRCNameResult(t *testing.T) {
 	if got := call(t, f.srv, fox, "irc_name", `{"name":"fox"}`); got != "you are fox" {
 		t.Fatal(got)
 	}
-	if got := delivered(t, f, `{"session":"hs-fox-2","claimed":"fox"}`); got != "" {
+	if got := delivered(t, f, `{"pids":[7],"session":"hs-fox-2","claimed":"fox"}`); got != "" {
 		t.Fatalf("nothing is due: %q", got)
 	}
 	pm(t, f, dog, "fox", "to the new session")
@@ -215,6 +215,50 @@ func TestTheNameIsClaimedFromTheIRCNameResult(t *testing.T) {
 	if got := delivered(t, f, `{"session":"hs-fox-2"}`); got != "pm dog: to the new session" {
 		t.Fatalf("the new session: %q", got)
 	}
+}
+
+// A claim is only the caller's to make: in the minute after fox confirms its name, no other agent's hook can take
+// the name (and with it fox's private messages), whatever it says it read. Regression test: before the claim was
+// tied to the agent that called irc_name, each of the refused requests below was accepted and delivered fox's
+// message to the wrong hook.
+func TestAnotherAgentCannotClaimAFreshName(t *testing.T) {
+	refused := []struct{ name, body string }{
+		{"a different process chain", `{"pids":[900,1],"seat":"@pc/tmux:%3","session":"hs-b","claimed":"fox"}`},
+		{"the same process id on another machine", `{"pids":[100],"seat":"@other/tmux:%1","session":"hs-b","claimed":"fox"}`},
+		{"no process chain and another seat", `{"seat":"@pc/tmux:%2","session":"hs-b","claimed":"fox"}`},
+		{"no process chain and no seat", `{"session":"hs-b","claimed":"fox"}`},
+	}
+	for _, tc := range refused {
+		t.Run(tc.name, func(t *testing.T) {
+			f := boundFixture(t)
+			fox := join(t, f, "fox", "@pc/tmux:%1", 100, "")
+			dog := join(t, f, "dog", "@pc/tmux:%2", 200, "")
+			if got := delivered(t, f, `{"pids":[100],"seat":"@pc/tmux:%1","session":"hs-a","claimed":"fox"}`); got != "" {
+				t.Fatalf("fox's own claim: nothing is due yet, got %q", got)
+			}
+			pm(t, f, dog, "fox", "for fox only")
+			if got := delivered(t, f, tc.body); strings.Contains(got, "for fox only") {
+				t.Fatalf("another agent claimed fox and was given %q", got)
+			}
+			if got := delivered(t, f, `{"session":"hs-a"}`); got != "pm dog: for fox only" {
+				t.Fatalf("fox's hook was given %q", got)
+			}
+			_ = fox
+		})
+	}
+
+	// Without a process id on either side, the caller's seat is what ties the claim to it.
+	f := boundFixture(t)
+	fox := join(t, f, "fox", "@pc/tmux:%1", 0, "")
+	dog := join(t, f, "dog", "@pc/tmux:%2", 0, "")
+	if got := delivered(t, f, `{"seat":"@pc/tmux:%2","session":"hs-b","claimed":"fox"}`); got != "" {
+		t.Fatalf("from another seat: %q", got)
+	}
+	pm(t, f, dog, "fox", "hello")
+	if got := delivered(t, f, `{"pids":[55],"seat":"@pc/tmux:%1","session":"hs-a","claimed":"fox"}`); got != "pm dog: hello" {
+		t.Fatalf("from the caller's seat: %q", got)
+	}
+	_ = fox
 }
 
 func TestProcessIDsAreMatchedPerHost(t *testing.T) {

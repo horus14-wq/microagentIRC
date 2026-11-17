@@ -179,13 +179,14 @@ func readStdin(stdin io.Reader) stdinFacts {
 const namePrefix = "you are "
 
 // claimedName returns the name irc_name just gave the agent, when this hook event follows that tool call: the tool
-// name ends with "irc_name" (agent CLIs prefix MCP tools, for example "mcp__mairc__irc_name") and its result holds a
-// text that is exactly "you are <name>" with a valid name. Anything else is "".
+// name is mairc's irc_name (isNameTool: agent CLIs prefix MCP tools, for example "mcp__mairc__irc_name") and its
+// result holds a text that is exactly "you are <name>" with a valid name. Anything else is "". The daemon decides
+// whether the claim is this agent's to make.
 //
 // The result's shape differs by CLI (a string, an object with a text or output field, a list of content blocks), so
 // every string in it is looked at, to a small depth.
 func claimedName(tool string, response json.RawMessage) string {
-	if !strings.HasSuffix(tool, "irc_name") || len(response) == 0 {
+	if !isNameTool(tool) || len(response) == 0 {
 		return ""
 	}
 	var v any
@@ -193,6 +194,23 @@ func claimedName(tool string, response json.RawMessage) string {
 		return ""
 	}
 	return findName(v, 4)
+}
+
+// isNameTool reports whether the tool name an agent CLI passed is mairc's irc_name: exactly "irc_name", or
+// "irc_name" after a prefix that names the mairc server and ends in a separator ("mcp__mairc__irc_name",
+// "mairc.irc_name", "mairc-irc_name"). Another server's tool that merely ends in the same letters is not.
+func isNameTool(tool string) bool {
+	const name = "irc_name"
+	prefix, ok := strings.CutSuffix(tool, name)
+	if !ok {
+		return false
+	}
+	if prefix == "" {
+		return true
+	}
+	last := prefix[len(prefix)-1]
+	separated := last == '_' || last == '.' || last == '-' || last == '/' || last == ':'
+	return separated && strings.Contains(strings.ToLower(prefix), "mairc")
 }
 
 func findName(v any, depth int) string {

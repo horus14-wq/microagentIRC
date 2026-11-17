@@ -9,6 +9,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -108,8 +109,8 @@ type server struct {
 	stopping chan struct{}
 	stopOnce sync.Once
 	bound    map[string]*binding
-	// named is when irc_name last set or confirmed each name, for the claim window.
-	named    map[string]time.Time
+	// named is the irc_name call that last set or confirmed each name, for the claim window.
+	named    map[string]namedBy
 	bindings core.Bindings // nil: bindings live in memory only
 }
 
@@ -139,7 +140,7 @@ func newServer(chat core.Chat, mcpServer *mcp.Server, token, version string, rel
 		sessions: make(map[string]*session),
 		pids:     make(map[pidKey]map[string]int),
 		bound:    make(map[string]*binding),
-		named:    make(map[string]time.Time),
+		named:    make(map[string]namedBy),
 		stopping: make(chan struct{}),
 	}
 }
@@ -270,7 +271,7 @@ func (s *server) serveMCP(w http.ResponseWriter, r *http.Request) {
 		s.rename(r.Context(), id, sess.Name)
 	}
 	if isNameCall(body) {
-		s.noteNamed(sess.Name)
+		s.noteNamed(id, sess.Name)
 	}
 	if out == nil {
 		w.WriteHeader(http.StatusAccepted)
@@ -506,14 +507,30 @@ func (s *server) index(sess *session, delta int) {
 	}
 }
 
-// noteNamed records that irc_name just set or confirmed the name: the start of its claim window.
-func (s *server) noteNamed(name string) {
+// namedBy is one irc_name call that set or confirmed a name: when, and which agent made it (the machine and process
+// id its shim reported, and the seat its hook sends).
+type namedBy struct {
+	at   time.Time
+	host string
+	pid  int
+	seat string
+}
+
+// noteNamed records that the session's irc_name call just set or confirmed the name: the start of its claim
+// window, which only that agent's hook may use (claim).
+func (s *server) noteNamed(id, name string) {
 	if name == "" {
 		return
 	}
 	s.mu.Lock()
-	s.named[name] = s.clock.Now()
-	s.mu.Unlock()
+	defer s.mu.Unlock()
+	sess := s.sessions[id]
+	if sess == nil {
+		return
+	}
+	s.named[name] = namedBy{
+		at: s.clock.Now(), host: identity.HostOf(sess.Seat), pid: sess.pid, seat: identity.SharedSeat(sess.Seat),
+	}
 }
 
 // bind records that the agent CLI session's hook runs for the name, in memory and, when the binding is new or
@@ -541,14 +558,27 @@ func (s *server) bind(ctx context.Context, hookSession, name string, now time.Ti
 // claim reports whether a hook may take the name it read from an irc_name result: irc_name set or confirmed that
 // exact name within claimWindow. The result is the agent's own, read by its own hook, so a fresh claim also moves a
 // name that an earlier session of the same agent held.
-func (s *server) claim(name string, now time.Time) bool {
+//
+// The claim must come from the agent that made the call. The agent CLI's process is an ancestor of both its shim
+// and its hook, so the hook's process chain must hold the process id the calling session's shim reported, on the
+// same machine. When either side has no process id, the hook must be in the caller's seat instead. Without this,
+// any session could take a name, and its private messages, in the minute after its owner confirmed it.
+func (s *server) claim(req hookRequest, now time.Time) bool {
+	name := req.Claimed
 	if !names.Valid(name) {
 		return false
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	at, ok := s.named[name]
-	if !ok || now.Sub(at) > claimWindow || now.Before(at) {
+	by, ok := s.named[name]
+	if !ok || now.Sub(by.at) > claimWindow || now.Before(by.at) {
+		return false
+	}
+	if by.pid > 0 && len(req.Pids) > 0 {
+		if identity.HostOf(req.Seat) != by.host || !slices.Contains(req.Pids, by.pid) {
+			return false
+		}
+	} else if req.Seat == "" || req.Seat != by.seat {
 		return false
 	}
 	for hookSession, b := range s.bound {
@@ -574,8 +604,8 @@ func (s *server) dropIdle(ctx context.Context, now time.Time) {
 			delete(s.bound, hookSession)
 		}
 	}
-	for name, at := range s.named {
-		if now.Sub(at) > claimWindow {
+	for name, by := range s.named {
+		if now.Sub(by.at) > claimWindow {
 			delete(s.named, name)
 		}
 	}
@@ -659,7 +689,7 @@ func (s *server) resolve(ctx context.Context, req hookRequest) (string, error) {
 	}
 	if hookSession != "" {
 		// A fresh irc_name result comes first: it also covers an agent that just changed its name.
-		if req.Claimed != "" && s.claim(req.Claimed, now) {
+		if req.Claimed != "" && s.claim(req, now) {
 			s.bind(ctx, hookSession, req.Claimed, now)
 			return req.Claimed, nil
 		}
