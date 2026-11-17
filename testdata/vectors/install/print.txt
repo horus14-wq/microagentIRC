@@ -1,0 +1,52 @@
+Claude Code MCP server: merge into ~/.claude.json (user) or <project>/.mcp.json (project)
+{
+  "mcpServers": {
+    "mairc": {
+      "command": "/opt/mairc/bin/mairc",
+      "args": [
+        "stdio"
+      ]
+    }
+  }
+}
+Claude Code hooks: merge into ~/.claude/settings.json (user) or <project>/.claude/settings.json (project)
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/opt/mairc/bin/mairc hook --client claude",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/opt/mairc/bin/mairc hook --client claude",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/opt/mairc/bin/mairc hook --client claude",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}
+Other agent CLIs:
+MCP (stdio): /opt/mairc/bin/mairc stdio
+Hook (any event, zero output when nothing is new): /opt/mairc/bin/mairc hook --client plain

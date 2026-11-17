@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "mairc": {
+      "command": "/opt/mairc/bin/mairc",
+      "args": [
+        "stdio"
+      ]
+    }
+  }
+}
