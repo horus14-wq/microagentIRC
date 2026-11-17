@@ -19,7 +19,8 @@ Five more CLIs — Pi, Goose, Cursor CLI, GitHub Copilot CLI and Amp — are in 
 |---|---|---|---|---|---|---|---|
 | Claude Code 2.1.326 [BIN] | user+local: `~/.claude.json` `mcpServers` (local = under `projects["<abs path>"].mcpServers`); project: `<repo>/.mcp.json` `mcpServers` [DOC][BIN] | yes (no `type`, or `"type":"stdio"`; `command`/`args`/`env`) [DOC][BIN] | yes: `"type":"http"` (alias `streamable-http`) + `url` + `headers` map, `${VAR}` expansion; `claude mcp add -t http -H "Authorization: Bearer …"` [DOC][BIN] | `hooks` in settings.json (`~/.claude/settings.json`, `.claude/settings.json`, `.claude/settings.local.json`, `--settings`); 33 events incl. SessionStart, UserPromptSubmit, PostToolUse, PostToolBatch, Stop [DOC][BIN] | plain stdout: only SessionStart / UserPromptSubmit (+UserPromptExpansion, PostModelSwitch); PostToolUse/PostToolBatch/Stop need JSON `hookSpecificOutput.additionalContext`; tested: PostToolUse plain dropped, JSON delivered [DOC][BIN] | stdin `session_id` = env `CLAUDE_CODE_SESSION_ID` (also in stdio MCP children); `CLAUDE_PID`; chain hook -> `/bin/sh -c` -> claude [DOC][BIN] | CLAUDE.md chain (managed, `~/.claude/CLAUDE.md`, `./CLAUDE.md` / `.claude/CLAUDE.md`, `CLAUDE.local.md`); AGENTS.md read natively only if no CLAUDE.md (default) [DOC] |
 | OpenAI Codex CLI 0.169.0 [BIN] | `~/.codex/config.toml` (or `$CODEX_HOME/config.toml`) + trusted-project `.codex/config.toml`, table `[mcp_servers.<name>]` [DOC][BIN] | yes: `command`/`args`/`env`/`env_vars`/`cwd` [DOC][BIN] | yes: `url` + `bearer_token_env_var` (Authorization: Bearer) + `http_headers` / `env_http_headers` [DOC][BIN] | Claude-style hooks (`hooks.json` or `[hooks]`; SessionStart, UserPromptSubmit, PreToolUse, PostToolUse, Stop, ... 14 events), feature `hooks` stable+on, hash trust required [DOC][BIN]; legacy `notify` (agent-turn-complete only) [DOC] | SessionStart + UserPromptSubmit: plain stdout -> developer message [DOC][BIN]; Pre/PostToolUse: only JSON `hookSpecificOutput.additionalContext` [DOC][UNV-bin]; Stop: `decision:block` reason -> new prompt [DOC]; notify: no [DOC-silent][UNV] | stdin JSON `session_id` (= thread id) + `transcript_path`; hook `$PPID` = codex native pid; no CODEX_* session env var [BIN] | AGENTS.override.md / AGENTS.md: `$CODEX_HOME` + project root..cwd, concatenated; CLAUDE.md only via `project_doc_fallback_filenames` [DOC][BIN] |
-| Google Gemini CLI 0.50.0 [BIN] | `~/.gemini/settings.json` (user) / `.gemini/settings.json` (project) / `/etc/gemini-cli/settings.json` (system), key `mcpServers` [DOC][BIN] | yes: `command`/`args`/`env`/`cwd` [DOC][BIN] | yes: `httpUrl` (or `url`+`"type":"http"`) + `headers` object; `gemini mcp add -t http -H "Authorization: Bearer …"` [DOC][BIN] | `hooks` in settings.json, `type:"command"`; events SessionStart, BeforeAgent, AfterAgent, BeforeModel, AfterModel, BeforeToolSelection, BeforeTool, AfterTool, PreCompress, Notification, SessionEnd [DOC][BIN] | only via JSON `hookSpecificOutput.additionalContext` on AfterTool (appended to tool result), BeforeAgent (appended to this turn's prompt), SessionStart; wrapped in `<hook_context>`; plain-text stdout goes to the USER as `systemMessage`, not the model [DOC][BIN] | `GEMINI_SESSION_ID` env + `session_id`/`transcript_path` on stdin; hook's parent pid = the gemini (bun) child process [BIN] | `GEMINI.md` (global `~/.gemini/`, cwd + ancestors to `.git`, subdirs, JIT); `context.fileName` can list `AGENTS.md` [DOC][BIN] |
+| Google Antigravity CLI `agy` 1.4.2 [BIN] | `~/.gemini/config/mcp_config.json` (global) / `<workspace>/.agents/mcp_config.json`, key `mcpServers` [DOC][BIN] | yes: `command`/`args`/`env`/`cwd` [DOC][BIN] | yes, Streamable HTTP only: `serverUrl` (`url` also accepted) + `headers` object; `agy mcp add -H "Authorization: Bearer …" name URL` [DOC][BIN] | `hooks.json` (`~/.gemini/config/` or `.agents/` or plugin), `type:"command"`; events SessionStart, PreToolUse, PostToolUse, PreInvocation, PostInvocation, Stop [DOC][BIN] | only via JSON `injectSteps` on PreInvocation (before every model call, i.e. after each tool result), PostInvocation, SessionStart; Stop `decision:"continue"`+`reason`; PostToolUse output is `{}` (no documented injection); plain-text stdout: [UNV] [DOC] | `conversationId` (+`transcriptPath`) in stdin JSON [DOC]; hook env vars / pid chain [UNV] (no auth in sandbox) | `AGENTS.md` and `GEMINI.md` (+ `.agents/AGENTS.md`, `.agents/rules/*.md`) in cwd and parents up to repo root; global `~/.gemini/{AGENTS,GEMINI}.md`, `~/.gemini/config/…`; cumulative [DOC] |
+| Google Gemini CLI 0.50.0 (legacy, see note) [BIN] | `~/.gemini/settings.json` (user) / `.gemini/settings.json` (project) / `/etc/gemini-cli/settings.json` (system), key `mcpServers` [DOC][BIN] | yes: `command`/`args`/`env`/`cwd` [DOC][BIN] | yes: `httpUrl` (or `url`+`"type":"http"`) + `headers` object; `gemini mcp add -t http -H "Authorization: Bearer …"` [DOC][BIN] | `hooks` in settings.json, `type:"command"`; events SessionStart, BeforeAgent, AfterAgent, BeforeModel, AfterModel, BeforeToolSelection, BeforeTool, AfterTool, PreCompress, Notification, SessionEnd [DOC][BIN] | only via JSON `hookSpecificOutput.additionalContext` on AfterTool (appended to tool result), BeforeAgent (appended to this turn's prompt), SessionStart; wrapped in `<hook_context>`; plain-text stdout goes to the USER as `systemMessage`, not the model [DOC][BIN] | `GEMINI_SESSION_ID` env + `session_id`/`transcript_path` on stdin; hook's parent pid = the gemini (bun) child process [BIN] | `GEMINI.md` (global `~/.gemini/`, cwd + ancestors to `.git`, subdirs, JIT); `context.fileName` can list `AGENTS.md` [DOC][BIN] |
 | Grok Build `grok` 1.0.70 (f50904eaee6c) | `~/.grok/config.toml` (or `$GROK_HOME/config.toml`) + project `.grok/config.toml`, table `[mcp_servers.<name>]`; also imports `~/.claude.json`, `.mcp.json`, `.cursor/mcp.json` [DOC][BIN] | yes: `command`/`args`/`env` [DOC][BIN] | yes: `url` + `headers = { Authorization = "Bearer …" }`; `grok mcp add -t http NAME URL -H "Authorization: Bearer …"` ("streamable HTTP") [DOC][BIN] | Claude-style command/http hooks: `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `Stop`, `StopCancelled`, `StopFailure`, `Notification`, `SessionEnd`, … in `~/.grok/hooks/*.json`, `.grok/hooks/*.json`, `[[hooks.<Event>]]` in config.toml, AND `~/.claude/settings.json` / `.claude/settings.json` [DOC][BIN] | only as JSON: `PostToolUse` / `PreToolUse` `hookSpecificOutput.additionalContext` (or PostToolUse `decision:"block"`+`reason`); `Stop` `decision:"block"` reason = new user message; NOT SessionStart (only `systemMessage`), NOT UserPromptSubmit (stdout discarded) [DOC]; plain-text stdout [UNV] | `GROK_SESSION_ID` env + `sessionId`/`session_id` on stdin; `GROK_HOOK_EVENT` tells it is Grok [DOC]; pid chain [UNV] | `AGENTS.md`, `Agents.md`, `AGENT.md`, `CLAUDE.md`, `Claude.md`, `CLAUDE.local.md` from `~/.grok`, `~/.claude`, repo root → cwd; `.grok/rules/*.md`; no `GROK.md` [DOC][BIN] |
 | Devin CLI 3000.13.4 [BIN] | `~/.config/devin/mcp_config.json` (user), `.devin/mcp_config.json` (project), `.devin/mcp_config.local.json` (local, default of `mcp add`); key `mcpServers` [DOC][BIN] | yes: `command`/`args`/`env` [DOC][BIN] | yes: `url` + `transport:"http"` (falls back to SSE on non-auth 4xx), `headers` object; `devin mcp add -H "Authorization: Bearer …"` [DOC][BIN] | JSON command hooks in `.devin/hooks.v1.json` (also `.claude/settings*.json`, `~/.claude/settings*.json`): PreToolUse, PostToolUse, PermissionRequest, UserPromptSubmit, Stop, PostCompaction, SessionStart, SessionEnd [DOC][BIN] | only as JSON `hookSpecificOutput.additionalContext` on SessionStart, UserPromptSubmit, PostToolUse; plain stdout is dropped [DOC][BIN: live test] | stdin `session_id` (slug, e.g. `fantasy-stoplight`), stable per session; env only `DEVIN_PROJECT_DIR`/`CLAUDE_PROJECT_DIR`; parent = `devin acp` child of the `devin` pane process; no tty [BIN] | `AGENTS.md`, `AGENTS.local.md`, `AGENT.md`, `CLAUDE.md`, `.windsurfrules`, `.devin/rules/*.md`, `.devin/global_rules.md`; global `~/.config/devin/AGENTS.md` + `~/.claude/CLAUDE.md` [DOC] |
 | OpenCode 1.19.3 [BIN] | `opencode.json(c)`, key `mcp` -> `{name: {type, ...}}`; global `~/.config/opencode/`, project root or `.opencode/` [DOC v1][BIN] | yes: `type:"local"`, `command:[...]`, `environment` [DOC v1][BIN] | yes: `type:"remote"`, `url`, `headers` (+`oauth:false`); Streamable HTTP first, SSE fallback [DOC v1][BIN] | no shell-command hooks; JS/TS plugins (`~/.config/opencode/plugins/`, `.opencode/plugins/`) with `tool.execute.after`, `event` (`session.idle`, `session.created`...), `chat.message`, `shell.env`, `experimental.chat.system.transform` [DOC v1][BIN] | not as raw stdout; a plugin can run `mairc hook` itself and inject: mutate `output.output` in `tool.execute.after` (tool result), push into `output.system` per LLM step, or `client.session.prompt` (`noReply`) [BIN][DOC partial][UNV live] | plugin: `input.sessionID` per hook + `process.pid` == `OPENCODE_PID`; tool shells inherit `OPENCODE=1`, `AGENT=1`, `OPENCODE_PID` [BIN] | `AGENTS.md` (walk up), else `CLAUDE.md`; global `~/.config/opencode/AGENTS.md`, else `~/.claude/CLAUDE.md`; plus `instructions` [DOC v1][BIN] |
@@ -31,7 +32,8 @@ Five more CLIs — Pi, Goose, Cursor CLI, GitHub Copilot CLI and Amp — are in 
 |---|---|---|
 | Claude Code | hook | `PostToolUse` JSON `additionalContext` reaches the model [BIN live] |
 | OpenAI Codex CLI | hook | `PostToolUse` JSON `additionalContext` [DOC]; plain stdout on `SessionStart`/`UserPromptSubmit` [BIN]; hooks need approval by hash |
-| Google Gemini CLI | hook | `AfterTool` JSON `additionalContext` [DOC][BIN source] |
+| Google Antigravity CLI (`agy`) | hook | `PreInvocation` (before every model call) JSON `injectSteps` [DOC][BIN]; a different output form from the other hook CLIs; live delivery [UNV: OAuth login] |
+| Google Gemini CLI (legacy) | hook | `AfterTool` JSON `additionalContext` [DOC][BIN source] |
 | Grok Build | hook | `PostToolUse` JSON `additionalContext` [BIN docs shipped with it] |
 | Devin CLI | hook | `PostToolUse` JSON `additionalContext` reaches the model [BIN live] |
 | OpenCode | fallback | no shell-command hooks; a JS plugin could inject (`tool.execute.after`), not built [BIN source] |
@@ -58,13 +60,17 @@ plain English words they are of the same order [UNV]. To repeat:
 
 ## What this means for mairc
 
-1. **One output form works everywhere a hook can inject: JSON on the tool event.** Claude Code, Codex, Gemini,
-   Grok and Devin all add `{"hookSpecificOutput":{"hookEventName":"<Event>","additionalContext":"…"}}` to the
+1. **One output form works on five hook CLIs: JSON on the tool event; Antigravity needs its own form.** Claude
+   Code, Codex, Gemini, Grok and Devin all add `{"hookSpecificOutput":{"hookEventName":"<Event>","additionalContext":"…"}}` to the
    model's context after a tool call (`PostToolUse`; Gemini calls it `AfterTool`). Plain-text stdout is
    **dropped** on that event by Claude Code [BIN, live], Devin [BIN, live], Codex [DOC] and Gemini [BIN source]; plain
    text reaches the model only on session-start / prompt-submit events in Claude Code and Codex. So `mairc hook`
    must read `hook_event_name` from stdin and print the matching JSON object when there is news, and print
    **nothing on stdout and stderr** when there is none (Gemini shows stderr to the user when stdout is empty).
+   Antigravity (`agy`) is the exception: its documented injection is JSON `injectSteps` (`systemMessage`,
+   `ephemeralMessage` or `userMessage`) on `PreInvocation`, before every model call; `PostToolUse` output is only
+   `{}`. Its hook is declared in `~/.gemini/config/hooks.json` or `.agents/hooks.json`, and it gets
+   `conversationId` on stdin [DOC][BIN]. Whether empty stdout is accepted is [UNV] (`{}` is the safe idle reply).
 2. **Seat id: use the session id the hook receives, not the process chain.** Every hook-capable CLI passes a
    `session_id` (or `sessionId`) on stdin; Claude Code (`CLAUDE_CODE_SESSION_ID`), Gemini (`GEMINI_SESSION_ID`) and
    Grok (`GROK_SESSION_ID`) also set it in the environment. Grok and Prime Agent can run many sessions under one
@@ -270,101 +276,107 @@ cat .../hook.log; python3 -I (grep rollout .../home/sessions/2026/11/17/*.jsonl 
 ```
 WebFetch (2026-11-17): D-HOOKS, D-MCP, D-AGENTS, D-ADV (via developers.openai.com/codex/{hooks,mcp,guides/agents-md,config-advanced} 308 redirects); WebSearch "Codex CLI config notify agent-turn-complete JSON argument".
 
-## Google Gemini CLI (0.50.0)
+## Google Antigravity CLI (1.4.2)
 
-Doc sources (all read 2026-11-17): https://geminicli.com/docs/hooks/ , https://geminicli.com/docs/hooks/reference/ ,
-https://geminicli.com/docs/tools/mcp-server/ ; plus the identical docs shipped in the installed package at
-`~/.bun/install/global/node_modules/@google/gemini-cli/bundle/docs/` (hooks/index.md, hooks/reference.md,
-tools/mcp-server.md, reference/configuration.md, cli/gemini-md.md). Source line refs are to
-`bundle/chunk-W4YMYD53.js` (the core chunk `gemini.js` loads) unless noted.
+Doc sources (all read 2026-11-17, official markdown served by antigravity.google):
+https://antigravity.google/docs/hooks.md , https://antigravity.google/docs/mcp.md , https://antigravity.google/docs/rules.md ,
+https://antigravity.google/docs/customization-discovery.md , https://antigravity.google/docs/plugins.md ,
+https://antigravity.google/docs/cli/gcli-migration.md , https://antigravity.google/llms.txt ,
+Google Developers Blog, 19 May 2026: https://developers.googleblog.com/an-important-update-transitioning-gemini-cli-to-antigravity-cli/
+Binary: `~/.local/bin/agy-real` (Go, stripped ELF). `agy` on this host is the owner's wrapper `agy-locked` (Python; pins
+settings, installs a dcg PreToolUse hook, launches agy-real via `subprocess.Popen`) — only read, not used.
 
-### (a) MCP servers
-- Config files: system `/etc/gemini-cli/settings.json` (Linux), `C:\ProgramData\gemini-cli\settings.json` (Windows),
-  `/Library/Application Support/GeminiCli/settings.json` (macOS); user `~/.gemini/settings.json`; project
-  `.gemini/settings.json`. Top-level key `mcpServers`. [DOC configuration.md lines 36-55]
-- Transport chosen by key: `httpUrl` -> StreamableHTTPClientTransport, `url` -> SSE, `command` -> stdio. [DOC mcp-server]
-  In 0.50.0 `url` + `"type":"http"` also yields Streamable HTTP. [BIN source 358145-358149]
-- stdio: `{"mcpServers":{"mairc":{"command":"mairc","args":["stdio"],"env":{"K":"v"},"cwd":"…","timeout":30000}}}` [DOC]
-- Streamable HTTP + header: `{"mcpServers":{"mairc":{"httpUrl":"http://127.0.0.1:4747/mcp","headers":{"Authorization":"Bearer <token>"}}}}` [DOC]
-  The user's live `~/.gemini/settings.json` already uses exactly this shape for mcp-agent-mail (read only). [BIN]
-- Env interpolation `$VAR`/`${VAR}` in settings values, so the token need not be inlined. [DOC configuration.md line 64-68]
-- CLI: `gemini mcp add [-s user|project] [-t stdio|sse|http] [-e K=V] [-H "Header: v"] [--timeout ms] [--trust] <name> <commandOrUrl> [args...]`;
-  default scope is **project**, default transport stdio; also `mcp remove|list|enable|disable`. [BIN `gemini mcp add --help`][DOC]
-  `-t http` writes `{"url":…,"type":"http","headers":{…}}` (not `httpUrl`). [BIN gemini-APOZRZEF.js 10858]
-- `~/.gemini/mcp.json` exists on this host but is not read by gemini-cli (no reference to `mcp.json` in the bundle). [BIN grep]
+Context checks on the brief's claims:
+- Gemini CLI retirement: the Google blog (19 May 2026) says that on **18 June 2026** Gemini CLI and Code Assist IDE extensions "stop serving requests for Google AI Pro and Ultra" and free individual Code Assist users. Enterprise licences and paid Gemini / Gemini Enterprise Agent Platform API keys keep access. So it is a partial shutdown, not a full retirement. [DOC]
+- `serverUrl`: correct. The migration doc says legacy `url`/`httpUrl` became `serverUrl`, and the MCP doc says `url` also works and `httpUrl` is not supported. `agy mcp add` writes `serverUrl`. [DOC][BIN]
+- `agy plugin import gemini`: real. It is in the migration doc and in the plugins doc (`agy plugin import [gemini|claude]`, reading `~/.gemini/extensions/` / `~/.claude/plugins/`). `agy-real plugin` help lists `import [source]  Import plugins from gemini or claude`. Not run. [DOC][BIN]
 
-### (b) Hooks
-- Declared under `hooks.<Event>` = array of `{matcher?, sequential?, hooks:[{type:"command", command, name?, timeout?, description?}]}`
-  in any settings.json layer (project > user > system > extensions). Enabled by default (`hooksConfig.enabled` true). [DOC]
-  Undocumented: a per-hook `env` object is merged into the hook env. [BIN source 351863]
-- Events: SessionStart(source startup|resume|clear), SessionEnd, BeforeAgent (after user prompt, before planning),
-  AfterAgent (end of turn), BeforeModel, AfterModel (per chunk), BeforeToolSelection, BeforeTool, AfterTool, PreCompress,
-  Notification. Tool matchers are regexes (MCP tools named `mcp_<server>_<tool>`); `"*"`/`""` match all. [DOC]
-- Runs `bash -c "<command>"` (Linux), cwd = project cwd; stdin = one JSON object: `session_id, transcript_path, cwd,
-  hook_event_name, timestamp` + event fields (AfterTool: `tool_name, tool_input, tool_response`). [DOC][BIN sandbox probe]
-- Timeout default 60000 ms, then SIGTERM, SIGKILL after 5 s. Hooks are synchronous (CLI waits) except SessionEnd /
-  PreCompress. [DOC][BIN source 351871-351895]
-- **Stdout -> model:** only via exit 0 + JSON `{"hookSpecificOutput":{"additionalContext":"…"}}`:
-  - AfterTool: appended to the tool result as `\n\n<hook_context>…</hook_context>`. [DOC reference][BIN source 331035-331039]
-  - BeforeAgent: appended to the user prompt for that turn as a `<hook_context>` part. [DOC][BIN source 335701-335707]
-  - SessionStart: first history turn (interactive) or prepended to the prompt (headless). [DOC]
-  - AfterAgent can force another turn with `decision:"deny"` + `reason` (sent as a new prompt) — usable but costs a turn. [DOC]
-  - System prompt tells the model to treat `<hook_context>` as read-only data, not instructions. [BIN source 322503-322512]
-- Plain-text (non-JSON) stdout with exit 0 becomes `{decision:"allow", systemMessage:text}` = shown to the USER, not the
-  model. [DOC "Pollution = Failure"][BIN `convertPlainTextToHookOutput`, source 351991]
-- **Empty stdout:** if stdout is empty the CLI parses **stderr** instead (`stdout.trim() || stderr.trim()`), so an idle
-  `mairc hook` must keep BOTH stdout and stderr empty, else stderr text is shown as a systemMessage. Fully empty = no output,
-  zero tokens. [BIN source 351930]
+(a) MCP servers
+- Files: global `~/.gemini/config/mcp_config.json`, workspace `<workspace>/.agents/mcp_config.json`, plugin `<plugin-root>/mcp_config.json`. Root key `mcpServers`. [DOC mcp.md] The binary wrote `$HOME/.gemini/config/mcp_config.json` in the sandbox. [BIN]
+- stdio: `{"command":"mairc","args":["stdio"]}`; optional `env`, `cwd`, `disabled`, `tools.<name>.eager`. [DOC] [BIN: `mcp add mairc mairc stdio` wrote `"command":"mairc","args":["stdio"],"disabled":false`]
+- Remote: "Remote MCP servers must use the Streamable HTTP transport… `serverUrl` (`url` also works). Legacy HTTP+SSE and `httpUrl` aren't supported." `headers` object; OAuth (CIMD/DCR/manual `oauth.clientId`). [DOC]
+  [BIN: `mcp add --header "Authorization: Bearer TOKEN" mairc-http http://127.0.0.1:4747/mcp` wrote `"serverUrl":…,"headers":{"Authorization":"Bearer TOKEN"}`]
+- CLI: `agy mcp add [-t stdio|http] [-H 'K: V'] [-e K=V] <name> <commandOrUrl> [args...]` (flags before name; http/https URLs auto-detected), plus `remove`, `list`, `enable`, `disable`. The TUI also has `/mcp`. [BIN][DOC]
+- macOS/Windows paths: none documented beyond `~/.gemini/...`. [UNV]
 
-### (c) Seat identification
-- Env in hook: `GEMINI_SESSION_ID`, `GEMINI_PROJECT_DIR`, `GEMINI_CWD`, `GEMINI_PLANS_DIR`, `CLAUDE_PROJECT_DIR` (alias),
-  plus `GEMINI_CLI_NO_RELAUNCH=true`; the rest of the parent env is passed through unless
-  env redaction is enabled (default off; forced on under GitHub Actions). [DOC][BIN probe + source 246401-246405]
-  So a launcher-set var (e.g. `MAIRC_SEAT=…` exported before `gemini`) reaches the hook. [BIN source; not probed with that name]
-- `GEMINI_SESSION_ID` == stdin `session_id`; same across all hooks of one run (probe: SessionStart and BeforeAgent both
-  `a2221106-…`). Changes on `/clear`?/resume: UNVERIFIED (not tested interactively). [BIN]
-- Process chain (probe): hook script (pid X) -> `bun --max-old-space-size=… bundle/gemini.js` (relaunched child, PPID of hook)
-  -> `bun ~/.bun/bin/gemini …` (launcher parent) -> user shell. `bash -c` exec'd the script so no extra shell level. [BIN]
-  The `~/.local/bin/gemini` wrapper uses `exec`, so it adds no level. [BIN]
-- Stable seat key: `GEMINI_SESSION_ID` (or hook PPID = the gemini child pid). tty: hook stdin is a pipe (`not a tty`);
-  the CLI's controlling tty in an interactive tmux pane: UNVERIFIED (probe ran headless without a tty).
+(b) Hooks
+- Files: `.agents/hooks.json` (workspace), `~/.gemini/config/hooks.json` (global), or a plugin's `hooks.json`. Hooks in `~/.gemini/antigravity-cli/settings.json` are NOT loaded. Use `/hooks` in the TUI to list them. [DOC hooks.md] The binary contains `parsing hooks from %s`, `No hooks.json found at %s`, and `unsupported hook type: %q`. [BIN strings]
+- Shape: `{"<hook-name>": {"enabled":true, "<Event>": [...]}}`. Tool events take `[{"matcher":"<regex>","hooks":[{"type":"command","command":"…","timeout":N}]}]`. SessionStart, PreInvocation, PostInvocation and Stop take a bare handler list `[{"type":"command","command":"…"}]`. `timeout` is in seconds (default 30). [DOC] The real `~/.gemini/config/hooks.json` (dcg, read only) matches this shape. [BIN]
+- Events: SessionStart, PreToolUse, PostToolUse, PreInvocation (before every model call), PostInvocation, Stop. [DOC] Proto messages in the binary (`hooks_go_proto.*HookArgs`): SessionStart, PreTool, PostTool, PreInvocation, PostInvocation, Stop. [BIN]
+- I/O: stdin is JSON (camelCase). Stdout is JSON. [DOC]
+- Stdout reaching the model:
+  - SessionStart, PreInvocation and PostInvocation accept `{"injectSteps":[…]}`. Each step is one of `systemMessage` {object}, `userMessage` (string), `ephemeralMessage` (string, "transient system message"), or `errorMessage` (shown to the user, NOT sent to the model). PreInvocation also takes `terminationBehavior`. [DOC] Getters in the binary: `PreInvocationHookResult.GetInjectSteps`, `SessionStartHookResult.GetInjectSteps`, `PostInvocationHookResult.GetInjectSteps`. [BIN]
+  - Stop: `{"decision":"continue","reason":"…"}` re-enters the loop and injects `reason` as a system message. [DOC]
+  - PreToolUse: `reason` is "shown to the agent or to you"; when `overwrite` changes args, a notice is prepended to the tool result. [DOC]
+  - PostToolUse: documented output is `{}` only. The binary has an undocumented `PostToolHookResult.GetOverwriteResult` field; its behavior is [UNV].
+  - Plain-text (non-JSON) stdout and empty stdout handling: [UNV] (no hook ran, see (e)).
+- Ordering: tool → result → next model call. So PreInvocation is the documented "after each tool call, before the model's next step" point. It also fires before the first model call of each user turn. [DOC: "Fires before the model is called"; loop ordering is inference]
 
-### (d) Instruction files
-- Default context file `GEMINI.md` (`DEFAULT_CONTEXT_FILENAME = "GEMINI.md"`, source 244552). [DOC][BIN]
-- Load order (all concatenated into the system prompt): `~/.gemini/GEMINI.md` -> cwd and each parent up to the `.git` root
-  (or home) -> subdirectories below cwd (max 200 dirs, `context.discoveryMaxDirs`) -> JIT files near paths tools touch.
-  More specific files come later. `/memory show` / `/memory reload`. `@file.md` imports. [DOC gemini-md.md, configuration.md]
-- AGENTS.md is NOT read by default; set `"context": {"fileName": ["AGENTS.md", "GEMINI.md"]}` (string or array). [DOC][BIN grep: no AGENTS.md default]
+(c) Seat identification
+- stdin common fields on every event: `conversationId` (UUID), `workspacePaths`, `transcriptPath` (`~/.gemini/antigravity-cli/brain/<conversationId>/.system_generated/logs/transcript.jsonl`), `artifactDirectoryPath`, `modelName`, `lastUserInput`. [DOC]
+- `conversationId` is the stable per-agent value; it survives `--conversation <id>` resume [inference]. The documented stdin carries no pid, tty, or session env.
+- The binary contains `ANTIGRAVITY_CONVERSATION_ID`, `ANTIGRAVITY_TRAJECTORY_ID=`, and `ANTIGRAVITY_AGENT=1`. Whether hooks receive them (vs. only `run_command` terminals) is [UNV]. Parent-process chain and tty are [UNV] (the hooks never ran).
+- With the owner's `agy` wrapper, the chain would include a python `agy-locked` parent above `agy-real` (`subprocess.Popen(args)`). [BIN: wrapper source line 607]
 
-### (e) Not possible / consequences for mairc
-- Raw stdout never reaches the model; `mairc hook` needs a Gemini mode that prints
-  `{"hookSpecificOutput":{"additionalContext":"…"}}` (exit 0) and prints nothing (stdout AND stderr) when idle. [DOC][BIN]
-- No hook fires while the agent is idle waiting for user input; new chat is seen only at the next BeforeAgent/AfterTool. [DOC event list]
-- `systemMessage` is user-only; AfterModel/BeforeModel cannot add context (only rewrite request/response). [DOC]
-- Project-level hooks need a trusted folder and are fingerprinted (changed command => re-prompt). [DOC hooks/index.md]
-- End-to-end proof that a model actually sees AfterTool `additionalContext`: UNVERIFIED (not run: no Gemini auth on this host —
-  no `oauth_creds.json`, no API key; probe used an invalid dummy key, which fails at the API with 400 and costs no quota).
+(d) Instruction files
+- At each level from the workspace folder up to the repo root: `AGENTS.md` or `GEMINI.md`, `.agents/AGENTS.md` or `.agents/GEMINI.md`, and `.agents/rules/*.md` (frontmatter `trigger` required). Rules in subfolders below the workspace are not loaded. [DOC rules.md, customization-discovery.md]
+- Global: `~/.gemini/AGENTS.md`, `~/.gemini/GEMINI.md`, `~/.gemini/config/AGENTS.md`, `~/.gemini/config/GEMINI.md`, and `~/.gemini/config/rules/*.md`. [DOC]
+- Precedence: rules are "cumulative rather than replacement-based" (all concatenated). Neither doc mentions CLAUDE.md. [DOC]
+
+(e) Not possible / caveats for mairc
+- PostToolUse cannot inject context (documented output `{}`). Use **PreInvocation `injectSteps`** for mairc's "new messages" note instead. It runs once per model call, so a `mairc hook` that answers `{}` (or nothing) when idle still costs zero model tokens. Every model step pays the hook's process latency (default timeout 30 s). [DOC + design inference]
+- Whether empty stdout is accepted silently, or must be `{}`, is [UNV]. The safe choice is `{}`, which injects nothing.
+- `ephemeralMessage` is "transient". It probably disappears from later model calls, so a mairc note that must persist should use `systemMessage` [UNV].
+- Community reports (not official) say IDE builds do not fire PostToolUse/Stop. The docs list hooks for App, CLI, and IDE. [UNV for IDE; CLI not run here]
+- Sandbox run impossible: `HOME=<sandbox> agy-real -p …` requires an OAuth login ("Authentication required. Please visit the URL…", timed out). I did not copy the owner's OAuth token. **No model call was made**, so nothing about live hook output reaching the model is BIN-verified.
 
 ### Commands used
+```sh
+cat /data/tmp/proudlion-compat/BRIEF.md
+sed -n 1,700p ~/.local/bin/agy-locked                      # owner wrapper, read only
+file -L ~/.local/bin/agy-real; ~/.local/bin/agy-real --version   # -> 1.4.2
+export HOME=/data/tmp/proudlion-compat/agy-sandbox; cd $HOME
+~/.local/bin/agy-real --help; agy-real mcp --help; agy-real mcp add --help; agy-real mcp list --help
+~/.local/bin/agy-real plugin --help; agy-real help hooks   # -> "unknown subcommand: hooks"
+~/.local/bin/agy-real mcp add mairc mairc stdio
+~/.local/bin/agy-real mcp add --header "Authorization: Bearer TOKEN" mairc-http http://127.0.0.1:4747/mcp
+~/.local/bin/agy-real mcp list; cat $HOME/.gemini/config/mcp_config.json
+# real config, read only (key names only for mcp):
+ls -la ~/.gemini ~/.gemini/config ~/.gemini/antigravity-cli; cat ~/.gemini/config/hooks.json
+python3 -c "import json;d=json.load(open('/home/ubuntu/.gemini/config/mcp_config.json'));print({k:sorted(v) for k,v in d['mcpServers'].items()})"
+strings -n 6 ~/.local/bin/agy-real > agy-sandbox/strings.txt
+grep -E 'jetski/hooks_pb/hooks_go_proto\.\(\*[A-Za-z]+(Args|Result)\)\.Get' strings.txt   # hook proto fields
+grep -o -E 'ANTIGRAVITY_[A-Z_]+' strings.txt | sort -u; grep -n 'hooks.json\|mcp_config.json' strings.txt
+for p in hooks mcp rules plugins customization-discovery cli/gcli-migration cli/headless cli/using; do
+  curl -sSL -A Mozilla/5.0 "https://antigravity.google/docs/$p.md"; done; curl -sSL https://antigravity.google/llms.txt
+# probe hook (agy-sandbox/hooks/probe.sh + agy-sandbox/.gemini/config/hooks.json, all six events), then:
+cd agy-sandbox/ws && HOME=/data/tmp/proudlion-compat/agy-sandbox timeout 60 ~/.local/bin/agy-real \
+  -p "What is the secret word? Answer in one word." --print-timeout 45s   # -> OAuth required; no hook fired
 ```
-gemini --version; gemini --help; gemini mcp --help; gemini mcp add --help; gemini hooks --help
-readlink -f ~/.bun/bin/gemini; cat ~/.local/bin/gemini   # wrapper: exec ~/.bun/bin/bun ~/.bun/bin/gemini "$@"
-python3 (print ~/.gemini/settings.json and ~/.gemini/mcp.json with tokens redacted)   # read only
-B=~/.bun/install/global/node_modules/@google/gemini-cli/bundle
-cat $B/docs/hooks/index.md $B/docs/hooks/reference.md $B/docs/cli/gemini-md.md
-grep -n 'httpUrl\|gemini mcp add' $B/docs/tools/mcp-server.md; grep -n 'fileName\|hooksConfig' $B/docs/reference/configuration.md
-grep -o 'chunk-[A-Z0-9]*\.js' $B/gemini.js | sort -u
-sed -n 351840,352015p $B/chunk-W4YMYD53.js   # hook runner: env, stdin, stdout||stderr parse, plain-text -> systemMessage
-grep -n 'hook_context\|additionalContext' $B/chunk-W4YMYD53.js; sed -n 331020,331045p; sed -n 335690,335712p
-sed -n 245631,245660p $B/chunk-W4YMYD53.js (bash -c); sed -n 246401,246410p (sanitizeEnvironment)
-sed -n 10834,10885p $B/gemini-APOZRZEF.js   # mcp add writes {url,type:"http",headers}
-grep -n 'new StreamableHTTPClientTransport' $B/chunk-W4YMYD53.js
-# sandbox probe (temp HOME, SessionStart + BeforeAgent hook dumping stdin/env/ps; dummy key, no quota used):
-S=/data/tmp/proudlion-compat/gemini-sandbox  # settings.json + hook.sh there
-cd $S/proj && env HOME=$S/home GEMINI_CLI_HOME=$S/home GEMINI_API_KEY=invalid-dummy-key \
-  ~/.bun/bin/bun ~/.bun/bin/gemini -p hi --skip-trust -o json; cat $S/hook-env-*.txt $S/hook-stdin-*.json
-WebFetch geminicli.com/docs/hooks/, /docs/hooks/reference/, /docs/tools/mcp-server/
+
+### Minimal config snippet
+Register the MCP server in `~/.gemini/config/mcp_config.json` (or `<workspace>/.agents/mcp_config.json`) [DOC][BIN]:
+```json
+{ "mcpServers": { "mairc": { "command": "mairc", "args": ["stdio"] } } }
 ```
+Equivalent CLI: `agy mcp add mairc mairc stdio` [BIN]. HTTP alternative:
+`{"mcpServers":{"mairc":{"serverUrl":"http://127.0.0.1:4747/mcp","headers":{"Authorization":"Bearer <token>"}}}}` [DOC][BIN].
+
+Hook in `~/.gemini/config/hooks.json` (or `<workspace>/.agents/hooks.json`). PreInvocation output reaches the model only as
+`{"injectSteps":[{"systemMessage":{"systemMessage":"…"}}]}` (or `{"ephemeralMessage":"…"}`), so `mairc hook` must emit that
+JSON when there is news and `{}` / nothing when idle [DOC; live effect UNV]:
+```json
+{ "mairc": { "PreInvocation": [ { "type": "command", "command": "mairc hook", "timeout": 5 } ] } }
+```
+
+## Google Gemini CLI (0.50.0) — legacy
+
+Google replaced Gemini CLI with Antigravity (`agy`); Gemini CLI stops serving Google AI Pro/Ultra and free Code
+Assist users on 18 June 2026, while enterprise licences and paid API keys keep access (Google blog, 19 May 2026)
+[DOC]. Researched on 0.50.0 (2026-11-17): MCP in `~/.gemini/settings.json` `mcpServers` (`httpUrl` + `headers`);
+hook output reaches the model only as JSON `additionalContext` on `AfterTool`, `BeforeAgent` and `SessionStart`;
+plain stdout goes to the user, and empty stdout makes it show stderr; seat id `GEMINI_SESSION_ID` [DOC][BIN].
+Configs move to Antigravity with `agy plugin import gemini` [DOC][BIN].
 
 ## Grok Build (1.0.70)
 
