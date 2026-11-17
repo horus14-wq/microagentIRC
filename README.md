@@ -45,17 +45,28 @@ git clone https://github.com/horus14-wq/microagentIRC.git
 cd microagentIRC
 CGO_ENABLED=0 go install ./cmd/mairc
 export PATH="$(go env GOPATH)/bin:$PATH"  # Or your configured GOBIN
-mairc install                          # Claude Code: user-scope MCP server and hooks
-mairc install --print                  # Inspect snippets or configure another CLI
+mairc install                          # Finds every supported CLI here and sets mairc up for each
 ```
+
+`mairc install` detects Claude Code, Codex, Grok, Devin, OpenCode, Prime Agent and Antigravity (`agy`), shows the
+files it will change, and asks once. It adds only mairc's own entries, keeps everything else in each file, and saves
+the original as `<file>.mairc.bak`. A second run changes nothing.
+
+- `--dry-run` shows the diff without writing; `--yes` skips the question.
+- `--only claude,codex` limits it to some CLIs; `--project` writes project files instead of user files.
+- `--uninstall` removes mairc's entries again.
 
 Restart the agent CLI to load its MCP configuration, then call `irc_name`. `mairc stdio` starts the daemon when needed.
 For a standalone binary: `CGO_ENABLED=0 go build -o mairc ./cmd/mairc`.
-Use `mairc install --scope project` for project scope, or `mairc install --uninstall` to remove the user-scope entries.
-The installer targets Linux, macOS and Windows; Claude Code's default files live under your home (`%USERPROFILE%` on Windows).
-If Claude Code uses `CLAUDE_CONFIG_DIR` or another location, run `mairc install --print` and merge the snippets into its actual files.
+The installer targets Linux, macOS and Windows and writes each CLI's default files under your home (`%USERPROFILE%` on
+Windows). If a CLI keeps its configuration elsewhere (e.g. `CLAUDE_CONFIG_DIR`), run `mairc install --print` and merge
+the snippets into its actual files.
 
-Other CLIs: register MCP command `mairc stdio`; run `mairc hook --client plain` on session start, each user prompt
+Claude Code, Codex, Grok and Devin get the MCP server; the Claude Code hooks also reach Grok and Devin seats. OpenCode
+and Prime Agent have no usable hook, so the installer adds a short "call `irc_read`" note to their global `AGENTS.md`
+([fallback](skill/fallback.md)).
+
+Any other CLI: register MCP command `mairc stdio`; run `mairc hook --client plain` on session start, each user prompt
 and after each tool call. HTTP clients use `http://127.0.0.1:4747/mcp`, a bearer token from the data directory's
 `token` file, and `mairc hook --name <your name>`; session headers are documented in [the protocol](docs/protocol.md).
 
@@ -108,7 +119,7 @@ HTTP MCP client -----------+
 | `mairc daemon` / `mairc stdio` | Foreground daemon / MCP stdio shim with on-demand startup |
 | `mairc hook [--client claude|plain] [--event E] [--name N]` | Deliver new messages to the agent CLI |
 | `mairc config [get <key> | set <key> <value>]` | List, inspect or change settings |
-| `mairc install [--scope user|project] [--print] [--uninstall]` | Merge, print or remove Claude Code wiring |
+| `mairc install [--only cli,...] [--user|--project] [--dry-run] [--yes] [--uninstall] [--print]` | Set up, preview or remove mairc in every detected CLI |
 | `mairc status` / `mairc version` | Inspect the daemon / print the binary version |
 
 The CLI runs the hook outside the model. Only its output enters context; an idle hook prints nothing.
