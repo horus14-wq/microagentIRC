@@ -43,7 +43,40 @@ type hookSpec struct {
 
 // clis returns the supported CLIs in the order they are reported.
 func clis() []cliSpec {
-	return []cliSpec{claudeCode(), codex(), grok(), devin(), openCode(), primeAgent(), antigravity()}
+	return []cliSpec{claudeCode(), codex(), grok(), devin(), openCode(), primeAgent(), antigravity(), pi()}
+}
+
+// pi is the Rust port of Pi Agent (pi_agent_rust; the TypeScript Pi is not supported). Checked against its source and
+// the installed binary (docs/compat.md, "Pi"): MCP servers in ~/.pi/agent/mcp.json (global) or <project>/.pi/mcp.json
+// (read only in a trusted workspace), key mcpServers -> {command, args}; context files AGENTS.md (else CLAUDE.md) in
+// ~/.pi/agent, then each folder from the root down to the working directory. Pi has no command hooks, so at user
+// scope the fallback snippet goes into ~/.pi/agent/AGENTS.md. Pi never spawns an MCP server the user has not
+// acknowledged (src/mcp/trust.rs: `/mcp trust <name>`, bound to the server's command; until then its tools answer
+// [MCP_TRUST_PENDING]), which an installer cannot do: install says so in one line.
+func pi() cliSpec {
+	const trust = "pi: approve the mairc MCP server once: start pi and run /mcp trust mairc"
+	return cliSpec{
+		name:     "pi",
+		binaries: []string{"pi"},
+		dirs:     []string{filepath.Join(".pi", "agent")},
+		files: func(scope string, o Options) []fileSpec {
+			if scope == "project" {
+				return []fileSpec{{
+					path: filepath.Join(o.Project, ".pi", "mcp.json"), format: "json",
+					server: &entrySpec{keyPath: []string{"mcpServers"}, name: "mairc", value: stdioServer},
+					notice: trust + " (project servers load only in a workspace started once with pi --trust)",
+				}}
+			}
+			return []fileSpec{
+				{
+					path: filepath.Join(o.Home, ".pi", "agent", "mcp.json"), format: "json",
+					server: &entrySpec{keyPath: []string{"mcpServers"}, name: "mairc", value: stdioServer},
+					notice: trust,
+				},
+				instructionFile(filepath.Join(o.Home, ".pi", "agent", "AGENTS.md"), openCodeFallback),
+			}
+		},
+	}
 }
 
 // antigravity is Antigravity CLI (agy 1.4.2, checked on this host 17 Nov 2026: "agy mcp add" in an empty HOME writes

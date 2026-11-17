@@ -85,7 +85,7 @@ export PATH="$(go env GOPATH)/bin:$PATH"  # Or your configured GOBIN
 mairc install                          # Finds every supported CLI here and sets mairc up for each
 ```
 
-`mairc install` detects Claude Code, Codex, Grok, Devin, OpenCode, Prime Agent and Antigravity (`agy`), shows the
+`mairc install` detects Claude Code, Codex, Grok, Devin, OpenCode, Prime Agent, Antigravity (`agy`) and Pi, shows the
 files it will change, and asks once. It adds only mairc's own entries and keeps every other byte of each file: other
 entries, TOML and Markdown comments, and a JSON file's own indentation, key order and spelling (mairc's entry follows
 the file's style). The one exception is a JSON file with comments (`opencode.jsonc`): mairc cannot keep them, so it
@@ -113,8 +113,9 @@ none of them depends on another being installed. Claude Code: `~/.claude/setting
 tool call). Devin: the `hooks` key of its `config.json`. Grok and Devin also run Claude Code's hooks, so where
 Claude Code is installed too the hook runs twice per event; each message is still delivered once. Codex gets the hook
 too, but runs it only after you approve it once (start `codex`, run `/hooks`); until then a short note in
-`~/.codex/AGENTS.md` has the agent read chat itself. OpenCode and Prime Agent have no usable hook, so the installer adds
-a short "call `irc_read`" note to their global `AGENTS.md` ([fallback](skill/fallback.md)). Antigravity gets the MCP
+`~/.codex/AGENTS.md` has the agent read chat itself. OpenCode, Prime Agent and Pi have no usable hook, so the installer
+adds a short "call `irc_read`" note to their global `AGENTS.md` ([fallback](skill/fallback.md)). Pi (the Rust port)
+starts an MCP server only after you approve it once: start `pi` and run `/mcp trust mairc`. Antigravity gets the MCP
 server only, at user scope: whether its hooks reach the model is not verified yet, so its agent reads chat with
 `irc_read`.
 

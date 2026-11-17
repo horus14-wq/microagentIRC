@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-// manyCLIsHome is a home directory as found on a machine with all seven supported CLIs in daily use: every file
+// manyCLIsHome is a home directory as found on a machine with all eight supported CLIs in daily use: every file
 // already holds the user's own servers, hooks, permissions, comments and instructions. Paths are relative to home,
 // slash-separated. No seed contains the word mairc, so any mairc byte left after uninstall is the installer's.
 func manyCLIsHome() map[string]string {
@@ -82,6 +82,8 @@ trust_level = "trusted"
 		".config/opencode/AGENTS.md": "# OpenCode\n\n- Keep answers short.\n- Never push.\n",
 		".prime/agent/settings.json": `{"defaultModel":"deepseek","mcpServers":{"fs":{"type":"stdio","command":"fs-mcp","args":["/home/u"]}}}`,
 		".prime/agent/AGENTS.md":     "My Prime rules.\n",
+		".pi/agent/mcp.json":         `{"mcpServers":{"docs":{"url":"https://docs.example/mcp","headers":{"X-Key":"k"}}}}`,
+		".pi/agent/AGENTS.md":        "My Pi rules.\n",
 		".gemini/config/mcp_config.json": `{
   "mcpServers": {
     "search": {
@@ -142,7 +144,7 @@ func withoutMairc(t *testing.T, raw string) string {
 	return string(canonical)
 }
 
-// The release gate (mairc-nlr): `mairc install` on a machine with all seven CLIs and real user content. Install
+// The release gate (mairc-nlr): `mairc install` on a machine with all eight CLIs and real user content. Install
 // succeeds; a second run is byte-identical; the user's content is intact; one corrupt file blocks only its own CLI;
 // uninstall leaves no mairc bytes, no stub files and no backups.
 func TestInstallOnAMachineWithManyCLIs(t *testing.T) {
@@ -238,7 +240,7 @@ func TestInstallOnAMachineWithManyCLIsAndOneCorruptFile(t *testing.T) {
 	code, out := runRaw(o)
 	devin := filepath.Join(home, ".config", "devin", "mcp_config.json")
 	if !strings.Contains(out, "devin: skipped, cannot parse "+devin+": fix it or use --print\n") || code != 1 ||
-		!strings.HasSuffix(out, "summary: set up claude, codex, grok, opencode, prime-agent, agy; skipped devin\n") {
+		!strings.HasSuffix(out, "summary: set up claude, codex, grok, opencode, prime-agent, agy, pi; skipped devin\n") {
 		t.Fatalf("install = %d:\n%s", code, out)
 	}
 	if got := string(read(t, devin)); got != corrupt {

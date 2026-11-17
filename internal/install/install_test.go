@@ -353,7 +353,7 @@ func TestOneBadFileSkipsOnlyItsCLI(t *testing.T) {
 	const handWritten = "model = \"grok-4\"\n\n[mcp_servers.mairc]\ncommand = \"/usr/local/bin/mairc\"\nargs = [\"stdio\"]\n"
 	write(t, openCode, broken, 0o600)
 	write(t, grokTOML, handWritten, 0o600)
-	all := []string{"claude", "codex", "grok", "devin", "opencode", "prime-agent", "agy"}
+	all := []string{"claude", "codex", "grok", "devin", "opencode", "prime-agent", "agy", "pi"}
 	code, out := runRaw(Options{Binary: testBinary, Home: home, Only: all})
 	for _, want := range []string{
 		"opencode: skipped, cannot parse " + openCode + ": fix it or use --print\n",
@@ -363,12 +363,13 @@ func TestOneBadFileSkipsOnlyItsCLI(t *testing.T) {
 		"updated " + filepath.Join(home, ".config", "devin", "mcp_config.json") + "\n",
 		"updated " + filepath.Join(home, ".prime", "agent", "settings.json") + "\n",
 		"updated " + filepath.Join(home, ".gemini", "config", "mcp_config.json") + "\n",
+		"updated " + filepath.Join(home, ".pi", "agent", "mcp.json") + "\n",
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("output lacks %q:\n%s", want, out)
 		}
 	}
-	if code != 1 || !strings.HasSuffix(out, "summary: set up claude, codex, devin, prime-agent, agy; skipped grok, opencode\n") {
+	if code != 1 || !strings.HasSuffix(out, "summary: set up claude, codex, devin, prime-agent, agy, pi; skipped grok, opencode\n") {
 		t.Fatalf("Run = %d, out:\n%s", code, out)
 	}
 	if got := string(read(t, openCode)); got != broken {

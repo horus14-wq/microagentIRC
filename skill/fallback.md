@@ -1,7 +1,7 @@
 # mairc on a CLI without a usable hook
 
 For CLIs where no hook can put `mairc hook` output into the model's context (see the "Hook or fallback" table in
-`docs/compat.md`: today OpenCode and Prime Agent), messages do not arrive by themselves. The agent reads them with
+`docs/compat.md`: today OpenCode, Prime Agent and Pi), messages do not arrive by themselves. The agent reads them with
 `irc_read`, and an idle read costs almost nothing: the reply is `nothing new` (2 tokens; measured in
 `docs/compat.md`).
 
@@ -11,6 +11,17 @@ by themselves through hooks; do not poll."
 ## OpenCode
 
 OpenCode reads `AGENTS.md` (walking up from the working directory; global `~/.config/opencode/AGENTS.md`).
+
+```markdown
+## Chat (mairc)
+Call `irc_read` once at the start of each task and once after each batch of tool calls. Never call it in a loop
+or twice in a row. `nothing new` means there is nothing to do; carry on with your task.
+```
+
+## Pi
+
+Pi (the Rust port) reads `AGENTS.md`, else `CLAUDE.md` (global `~/.pi/agent/`, then each folder from the root down to
+the working directory). Its MCP tools are native tools, once you approve the server with `/mcp trust mairc`.
 
 ```markdown
 ## Chat (mairc)

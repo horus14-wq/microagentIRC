@@ -243,6 +243,7 @@ func TestNewRowsWriteTheirDocumentedEntry(t *testing.T) {
 		{"devin", "linux", filepath.Join(".config", "devin", "mcp_config.json"), stdio},
 		{"devin", "windows", filepath.Join("AppData", "Roaming", "devin", "mcp_config.json"), stdio},
 		{"prime-agent", "linux", filepath.Join(".prime", "agent", "settings.json"), typed},
+		{"pi", "linux", filepath.Join(".pi", "agent", "mcp.json"), stdio},
 	}
 	for _, tc := range cases {
 		t.Run(tc.cli+"/"+tc.goos, func(t *testing.T) {
@@ -365,6 +366,7 @@ func TestNoHookRowsWriteTheFallbackSnippet(t *testing.T) {
 	for _, tc := range []struct{ cli, rel, snippet string }{
 		{"opencode", filepath.Join(".config", "opencode", "AGENTS.md"), openCodeFallback},
 		{"prime-agent", filepath.Join(".prime", "agent", "AGENTS.md"), primeAgentFallback},
+		{"pi", filepath.Join(".pi", "agent", "AGENTS.md"), openCodeFallback},
 	} {
 		home, project := t.TempDir(), t.TempDir()
 		agents := filepath.Join(home, tc.rel)
@@ -557,5 +559,14 @@ func TestSymlinkedConfigStaysALink(t *testing.T) {
 	}
 	if got := string(read(t, backupFile(backupRoot(Options{Home: home}), link))); got != "{\n  \"keep\": 1\n}\n" {
 		t.Fatalf("backup of the target = %q", got)
+	}
+}
+
+// Pi spawns no MCP server the user has not acknowledged (/mcp trust): install names that step, which it cannot take.
+func TestPiInstallNamesTheTrustStep(t *testing.T) {
+	home := t.TempDir()
+	code, out := runRaw(Options{Binary: testBinary, Home: home, Only: []string{"pi"}})
+	if code != 0 || !strings.Contains(out, "pi: approve the mairc MCP server once: start pi and run /mcp trust mairc\n") {
+		t.Fatalf("install --only pi = %d:\n%s", code, out)
 	}
 }

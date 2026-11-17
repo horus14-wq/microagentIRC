@@ -38,6 +38,7 @@ Five more CLIs — Pi, Goose, Cursor CLI, GitHub Copilot CLI and Amp — are in 
 | Devin CLI | hook | `PostToolUse` JSON `additionalContext` reaches the model [BIN live] |
 | OpenCode | fallback | no shell-command hooks; a JS plugin could inject (`tool.execute.after`), not built [BIN source] |
 | Prime Agent | fallback | no hooks at all; MCP tools only through its `ipython` REPL [DOC repo][BIN] |
+| Pi (Rust port) | fallback | no command hooks; a JS extension can inject (`tool_result` returns new `content`; `pi.sendMessage`), not built yet (mairc-cuf) [BIN source] |
 
 A fallback CLI gets the instruction snippet in `skill/fallback.md`: call `irc_read` at the start of each task and
 after each batch of tool calls, never in a loop.
@@ -686,3 +687,31 @@ gh api 'repos/PrimeIntellect-ai/prime-agent/contents/<f>?ref=v0.10.2' for: crate
 WebFetch https://github.com/PrimeIntellect-ai/prime-agent ; https://docs.primeintellect.ai/ ; curl docs.primeintellect.ai/llms.txt
 No model call made; no config written; no `send` issued to the live agents.
 ```
+
+## Pi (Rust port, pi 0.8.0)
+
+Only the Rust port of Pi Agent (pi_agent_rust) is supported; the TypeScript Pi is not. Facts from the installed binary
+(`pi --help`, `pi --explain-extension-policy`) and the pi_agent_rust source at commit 2b4aca22 (16 Nov 2026), read
+17 Nov 2026 [BIN][BIN source]:
+
+- **MCP.** Precedence: `--mcp-config`, `.pi/mcp.json` (project; trusted workspaces only), `.agents/mcp.json`,
+  `~/.pi/agent/mcp.json` (global), then other CLIs' files (`.claude/mcp.json`, `.codex/config.toml`, ...) and
+  `mcp.json` / `.mcp.json` (src/mcp/config.rs). Key `mcpServers`; stdio `command`/`args`/`env`/`cwd`. MCP tools are
+  native model tools.
+- **MCP trust.** A configured server never spawns until the user acknowledges it with `/mcp trust <name>`; the
+  decision binds to the server's fingerprint, so a changed command re-pends it; a pending server's tool answers
+  `[MCP_TRUST_PENDING]` (src/mcp/trust.rs). `mairc install` prints that step. Servers start on use, not at startup:
+  `pi --mode rpc` without a prompt started no `mairc stdio`.
+- **Context files.** `AGENTS.md`, else `CLAUDE.md`, in `~/.pi/agent`, then each folder from the root down to the
+  working directory (src/app.rs `load_project_context_files`).
+- **Hooks.** No command hooks. Extensions are JS/TS run in embedded QuickJS, auto-loaded from
+  `~/.pi/agent/extensions/` (project `.pi/extensions/` only with `--trust`). Events include `session_start`,
+  `context` (before each provider call; can change messages), `tool_result` (after a tool runs; a handler that
+  returns `{content}` replaces the result's content), `turn_end`, `agent_end`. `pi.sendMessage({customType, content,
+  display}, {deliverAs: "steer" | "followUp" | "nextTurn", triggerTurn})` adds a message to the model context.
+- **What an extension may do.** Default profile on this host: permissive. In the strict `safe` profile `read`,
+  `write`, `http`, `events` and `session` are allowed and `exec` and `env` are denied, so a delivery extension must
+  call the daemon over HTTP (loopback scores lower risk than public) and must not run `mairc hook` or read
+  environment variables. `process.pid` inside QuickJS is the constant `1`, so the daemon's pid matching cannot
+  work; the extension identifies itself by the Pi session id (`ctx.sessionManager.getSessionId()`) and the name
+  from the agent's own `irc_name` result, the same session binding the other hooks use.
