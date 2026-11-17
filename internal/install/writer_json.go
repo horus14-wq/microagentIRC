@@ -117,7 +117,7 @@ func addHooks(root *node, h *hookSpec, binary string) (edited, ok bool) {
 				}
 				found = true
 				if !handler.equal(want) {
-					handlers.items[i] = h.handler(binary)
+					handlers.items[i] = h.handler(binary).takePlace(handler)
 					edited = true
 				}
 			}

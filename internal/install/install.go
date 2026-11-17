@@ -371,7 +371,7 @@ func (t *target) apply(binary string, uninstall bool) (edited bool, problem stri
 		if !ok {
 			return false, fmt.Sprintf("cannot parse %s: fix it or use --print", t.path)
 		}
-		t.out = t.root.bytes()
+		t.out = t.root.render()
 		return edited, ""
 	case "block":
 		out, edited, problem := applyBlock(t.raw, t.spec.block, binary, uninstall)

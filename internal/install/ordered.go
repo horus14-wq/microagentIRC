@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
-	"io"
 	"strings"
 )
 
@@ -19,80 +18,168 @@ const (
 	scalarNode
 )
 
-// node is an order-preserving JSON value: an object keeps its keys in file order, so content the installer does not
-// touch is written back in the order it was read.
+// node is an order-preserving JSON value: an object keeps its keys in file order, and a value read from a file keeps
+// its own text and the whitespace around it, so content the installer does not touch is written back byte for byte.
 type node struct {
 	kind  nodeKind
 	keys  []string // object keys, parallel to items
 	items []*node  // object values or array elements
-	raw   []byte   // a scalar's JSON text
+	raw   []byte   // a scalar's JSON text, as written in the file
+
+	at       *placement // where the value sat in the file; nil for a value the installer built
+	parsed   bool       // a container read from the file
+	wasEmpty bool       // ... that had no members there
+	close    []byte     // ... and the whitespace before its closing bracket (between the brackets when empty)
 }
 
-// parse decodes one JSON document from data, keeping object key order and number text exactly.
+// A placement is the text around a value inside its parent, as read. For the document itself, lead and post are the
+// whitespace before and after it.
+type placement struct {
+	lead []byte // whitespace before the value (before its key, in an object)
+	key  []byte // an object member's key, as written
+	sep  []byte // between the key and the value: the colon and the whitespace around it
+	post []byte // whitespace after the value, before the comma that follows it
+}
+
+// parse decodes one JSON document from data, keeping object key order, every scalar's text and the whitespace between
+// tokens, so render can write it back unchanged.
 func parse(data []byte) (*node, error) {
-	dec := json.NewDecoder(bytes.NewReader(data))
-	dec.UseNumber()
-	n, err := parseValue(dec)
+	if !json.Valid(data) {
+		return nil, errNotJSON
+	}
+	s := &scanner{data: data}
+	lead := s.space()
+	n, err := s.value()
 	if err != nil {
 		return nil, errNotJSON
 	}
-	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
+	n.at = &placement{lead: lead, post: s.space()}
+	if s.pos != len(data) {
 		return nil, errNotJSON
 	}
 	return n, nil
 }
 
-func parseValue(dec *json.Decoder) (*node, error) {
-	tok, err := dec.Token()
-	if err != nil {
+// scanner walks a document json.Valid has accepted, recording where every value and separator is.
+type scanner struct {
+	data []byte
+	pos  int
+}
+
+func (s *scanner) peek() byte {
+	if s.pos < len(s.data) {
+		return s.data[s.pos]
+	}
+	return 0
+}
+
+// space consumes JSON whitespace and returns it.
+func (s *scanner) space() []byte {
+	start := s.pos
+	for s.pos < len(s.data) && strings.IndexByte(" \t\r\n", s.data[s.pos]) >= 0 {
+		s.pos++
+	}
+	return s.data[start:s.pos]
+}
+
+// expect consumes one byte, which must be c.
+func (s *scanner) expect(c byte) error {
+	if s.peek() != c {
+		return errNotJSON
+	}
+	s.pos++
+	return nil
+}
+
+// stringText consumes a JSON string and returns its text, quotes included.
+func (s *scanner) stringText() ([]byte, error) {
+	start := s.pos
+	if err := s.expect('"'); err != nil {
 		return nil, err
 	}
-	delim, isDelim := tok.(json.Delim)
-	if !isDelim {
-		raw, err := encodeScalar(tok)
+	for s.pos < len(s.data) {
+		switch s.data[s.pos] {
+		case '\\':
+			s.pos += 2
+		case '"':
+			s.pos++
+			return s.data[start:s.pos], nil
+		default:
+			s.pos++
+		}
+	}
+	return nil, errNotJSON
+}
+
+func (s *scanner) value() (*node, error) {
+	switch s.peek() {
+	case '{':
+		return s.container(objectNode, '}')
+	case '[':
+		return s.container(arrayNode, ']')
+	case '"':
+		raw, err := s.stringText()
+		return &node{kind: scalarNode, raw: raw}, err
+	}
+	start := s.pos
+	for s.pos < len(s.data) && strings.IndexByte(" \t\r\n,]}", s.data[s.pos]) < 0 {
+		s.pos++
+	}
+	if s.pos == start {
+		return nil, errNotJSON
+	}
+	return &node{kind: scalarNode, raw: s.data[start:s.pos]}, nil
+}
+
+// container reads an object or array whose opening bracket is at the cursor.
+func (s *scanner) container(kind nodeKind, closing byte) (*node, error) {
+	s.pos++
+	n := &node{kind: kind, parsed: true}
+	lead := s.space()
+	if s.peek() == closing {
+		s.pos++
+		n.wasEmpty, n.close = true, lead
+		return n, nil
+	}
+	for {
+		at := &placement{lead: lead}
+		if kind == objectNode {
+			keyText, err := s.stringText()
+			if err != nil {
+				return nil, err
+			}
+			var key string
+			if json.Unmarshal(keyText, &key) != nil {
+				return nil, errNotJSON
+			}
+			sepStart := s.pos
+			s.space()
+			if err := s.expect(':'); err != nil {
+				return nil, err
+			}
+			s.space()
+			at.key, at.sep = keyText, s.data[sepStart:s.pos]
+			n.keys = append(n.keys, key)
+		}
+		child, err := s.value()
 		if err != nil {
 			return nil, err
 		}
-		return &node{kind: scalarNode, raw: raw}, nil
-	}
-	switch delim {
-	case '{':
-		n := &node{kind: objectNode}
-		for dec.More() {
-			keyTok, err := dec.Token()
-			if err != nil {
-				return nil, err
-			}
-			key, ok := keyTok.(string)
-			if !ok {
-				return nil, errNotJSON
-			}
-			value, err := parseValue(dec)
-			if err != nil {
-				return nil, err
-			}
-			n.keys = append(n.keys, key)
-			n.items = append(n.items, value)
+		child.at = at
+		n.items = append(n.items, child)
+		trailing := s.space()
+		switch s.peek() {
+		case ',':
+			s.pos++
+			at.post = trailing
+			lead = s.space()
+		case closing:
+			s.pos++
+			n.close = trailing
+			return n, nil
+		default:
+			return nil, errNotJSON
 		}
-		if _, err := dec.Token(); err != nil {
-			return nil, err
-		}
-		return n, nil
-	case '[':
-		n := &node{kind: arrayNode}
-		for dec.More() {
-			value, err := parseValue(dec)
-			if err != nil {
-				return nil, err
-			}
-			n.items = append(n.items, value)
-		}
-		if _, err := dec.Token(); err != nil {
-			return nil, err
-		}
-		return n, nil
-	default:
-		return nil, errNotJSON
 	}
 }
 
@@ -107,7 +194,8 @@ func encodeScalar(v any) ([]byte, error) {
 	return bytes.TrimSuffix(b.Bytes(), []byte("\n")), nil
 }
 
-// bytes renders the document with two-space indentation and a trailing newline.
+// bytes renders the value canonically, ignoring how the file spelled its whitespace: two-space indentation and a
+// trailing newline. It is what a new file holds, and what equal compares.
 func (n *node) bytes() []byte {
 	var b bytes.Buffer
 	n.write(&b, 0)
@@ -157,6 +245,139 @@ func (n *node) write(b *bytes.Buffer, depth int) {
 	}
 }
 
+// A style is how new lines are written into an existing document: its indent unit, line ending and key separator,
+// or no line breaks at all for a compact file.
+type style struct {
+	newline        bool
+	unit, eol, sep string
+}
+
+// styleOf reads the document's style from its first member; a new or empty document gets the canonical style of
+// bytes (two spaces, "\n", ": ").
+func styleOf(root *node) style {
+	st := style{newline: true, unit: "  ", eol: "\n", sep: ": "}
+	if len(root.items) == 0 || root.items[0].at == nil {
+		return st
+	}
+	first := root.items[0].at
+	if len(first.sep) > 0 {
+		st.sep = string(first.sep)
+	}
+	lead := string(first.lead)
+	i := strings.LastIndexByte(lead, '\n')
+	if i < 0 {
+		st.newline = false
+		return st
+	}
+	if strings.Contains(lead, "\r\n") {
+		st.eol = "\r\n"
+	}
+	if unit := lead[i+1:]; unit != "" {
+		st.unit = unit
+	}
+	return st
+}
+
+// render writes the document as it will be stored: everything read from the file in its own text and whitespace, and
+// what the installer added in the file's style. A document the installer built renders as bytes does.
+func (n *node) render() []byte {
+	var b bytes.Buffer
+	st := styleOf(n)
+	if n.at != nil {
+		b.Write(n.at.lead)
+	}
+	n.emit(&b, 0, st)
+	if n.at != nil {
+		b.Write(n.at.post)
+	} else {
+		b.WriteString("\n")
+	}
+	return b.Bytes()
+}
+
+func (n *node) emit(b *bytes.Buffer, depth int, st style) {
+	if n.kind == scalarNode {
+		b.Write(n.raw)
+		return
+	}
+	open, closing := byte('{'), byte('}')
+	if n.kind == arrayNode {
+		open, closing = '[', ']'
+	}
+	b.WriteByte(open)
+	if len(n.items) == 0 {
+		if n.parsed && n.wasEmpty {
+			b.Write(n.close)
+		}
+		b.WriteByte(closing)
+		return
+	}
+	for i, child := range n.items {
+		if i > 0 {
+			b.WriteByte(',')
+		}
+		at := n.placementOf(i, depth, st)
+		b.Write(at.lead)
+		if n.kind == objectNode {
+			b.Write(at.key)
+			b.Write(at.sep)
+		}
+		child.emit(b, depth+1, st)
+		b.Write(at.post)
+	}
+	switch {
+	case n.parsed && !n.wasEmpty:
+		b.Write(n.close)
+	case st.newline:
+		b.WriteString(st.eol + strings.Repeat(st.unit, depth))
+	}
+	b.WriteByte(closing)
+}
+
+// placementOf is the text around item i: as read, or for a new item copied from the nearest sibling read from the
+// file (so it lines up with them), else in the document's style.
+func (n *node) placementOf(i, depth int, st style) *placement {
+	if at := n.items[i].at; at != nil {
+		return at
+	}
+	at := &placement{sep: []byte(st.sep)}
+	if st.newline {
+		at.lead = []byte(st.eol + strings.Repeat(st.unit, depth+1))
+	}
+	for _, j := range siblingOrder(i, len(n.items)) {
+		if sib := n.items[j].at; sib != nil {
+			at.lead, at.sep = sib.lead, sib.sep
+			break
+		}
+	}
+	if n.kind == objectNode {
+		at.key, _ = encodeScalar(n.keys[i])
+	}
+	return at
+}
+
+// siblingOrder lists the other indexes, nearest first, earlier before later.
+func siblingOrder(i, count int) []int {
+	order := make([]int, 0, count)
+	for d := 1; d < count; d++ {
+		if i-d >= 0 {
+			order = append(order, i-d)
+		}
+		if i+d < count {
+			order = append(order, i+d)
+		}
+	}
+	return order
+}
+
+// takePlace gives n the place old had in the file, so a replaced value sits where the old one did.
+func (n *node) takePlace(old *node) *node {
+	if old != nil {
+		n.at = old.at
+	}
+	return n
+}
+
 // equal reports whether two values render identically.
 func (n *node) equal(other *node) bool {
 	return other != nil && bytes.Equal(n.bytes(), other.bytes())
@@ -179,7 +400,7 @@ func (n *node) get(key string) *node {
 func (n *node) set(key string, value *node) {
 	for i, k := range n.keys {
 		if k == key {
-			n.items[i] = value
+			n.items[i] = value.takePlace(n.items[i])
 			return
 		}
 	}
