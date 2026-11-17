@@ -54,6 +54,16 @@ The agent is the first that applies:
    `X-Mairc-Pid` was that pid. A pid reported by sessions with **different** names is ambiguous and skipped;
 3. the name remembered for `seat`.
 
+What the client side can resolve depends on the platform (`internal/identity`):
+
+| | Linux (and other systems with `/proc`) | Windows |
+|---|---|---|
+| `pids` | parent chain from `/proc/<pid>/stat` | parent chain from a process snapshot; the walk stops at a parent that has exited, at a parent id reused by a process that started later (Windows keeps an orphan's recorded parent id), and at the idle and System processes |
+| `seat` | `env:` `$MAIRC_SEAT`, then `tmux:` `$TMUX_PANE`, then `tty:` the controlling terminal (`/dev/pts/N`), then `cwd:` | the same order; the terminal is the console the process is attached to, `tty:con:<hex window handle>` (one per console window or terminal tab); a process with no console falls back to `cwd:` |
+
+Where nothing resolves, `pids` is empty and the agent is found by `name` or `seat` alone, as on a system without
+`/proc`.
+
 Answers:
 
 - Named, something due: `200`, `Content-Type: text/plain; charset=utf-8`, one line per message
