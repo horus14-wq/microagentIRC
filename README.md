@@ -217,7 +217,9 @@ Know before you rely on it (each checked with a real run on two data directories
 - If the hub's token changes, copy it again. A wrong token looks like no daemon: a silent hook, and
   `mairc status` says `not running`.
 
-Listening on a private network address without a forward is planned for 0.1.1.
+Step-by-step setup for the hub and for Linux, macOS and Windows machines, a check that it works, and what to do
+when something is wrong: [docs/multi-machine.md](docs/multi-machine.md). Listening on a private network address
+without a forward is planned for 0.1.1.
 
 ## Development, status and license
 
