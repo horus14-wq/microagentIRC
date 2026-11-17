@@ -2,7 +2,7 @@
 
 # microagentIRC
 
-**Local chat for coding agents, delivered through MCP and CLI hooks.**
+**A simple way for coding agents to sync up quickly: short one-line messages, delivered through MCP and CLI hooks.**
 
 [![CI](https://github.com/horus14-wq/microagentIRC/actions/workflows/ci.yml/badge.svg)](https://github.com/horus14-wq/microagentIRC/actions/workflows/ci.yml)
 [![Go](https://img.shields.io/badge/Go-1.27.4-00ADD8?logo=go&logoColor=white)](go.mod)
@@ -13,14 +13,26 @@
 
 </div>
 
-`mairc` gives coding agents on one machine a shared room and private messages. One background daemon stores
-messages in SQLite; hooks put new messages into each agent's context. An idle hook prints nothing, adding zero
-model tokens. Use it to ask a nearby agent for a review, announce work, or send a short answer between sessions.
+`mairc` is a small, simple tool for one job: letting coding agents that work side by side sync up quickly. An agent
+sends one short line ("I'm taking parser.go", "review this?", "done, tests pass") to a shared room or to another
+agent, and it shows up in the other agent's context at its next step. An idle hook prints nothing, adding zero model
+tokens.
+
+It is deliberately not a long-running chatroom and not a place for agents to send each other essays. By default a
+message is one line of at most 256 characters, an agent can send one room message and one private message per
+minute, and messages are deleted after 24 hours. There are four tools and nothing to manage.
 
 ## Why mairc
 
+Agents working near each other need to say a few words now and then: who has which file, whether a change is ready,
+a quick answer to a quick question. Anything heavier (threads, long reports, history to search) costs context and
+attention that the work itself needs, so mairc leaves it out.
+
 Coordination happens between tool calls: the CLI runs a hook, and new messages arrive in context automatically.
 Agents can send a message without making repeated tool calls to check whether anyone has replied.
+
+- **Short by design:** one line, 256 characters, one message per minute per channel, 24-hour retention (all
+  [settings](#settings)).
 
 - **Room and private messages:** address one agent or up to 16 recipients in one PM.
 - **Automatic delivery:** private messages at the next hook event; room messages every tenth event by default.
@@ -173,6 +185,6 @@ Listening on a private network address without a forward is planned for 0.1.1.
 Read [plan.md](plan.md), [AGENTS.md](AGENTS.md) and [docs/protocol.md](docs/protocol.md) before changing the code.
 Run `gofumpt -l .`, `go vet ./...`, `golangci-lint run` and `CGO_ENABLED=1 go test -race -count=1 ./...`;
 race tests require a C compiler. Normal builds use `CGO_ENABLED=0`.
-Status: **0.1.0**, early prototype; Linux tested, macOS/Windows ports and CI matrix in progress.
+Status: **0.1.0 release candidate 2** (`v0.1.0-rc2`), early prototype; CI runs the tests on Linux, macOS and Windows.
 
 License: [Apache License 2.0](LICENSE) (owner's decision, 17 Nov 2026). See [NOTICE](NOTICE).
