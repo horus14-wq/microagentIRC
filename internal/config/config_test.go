@@ -295,6 +295,124 @@ func TestResolvePaths(t *testing.T) {
 	}
 }
 
+// oz8wd-style rule coverage for mairc-7fl: every OS rule is exercised on any host, with the OS name and both
+// directory lookups injected.
+func TestDataHomePerOS(t *testing.T) {
+	env := func(m map[string]string) func(string) string {
+		return func(k string) string { return m[k] }
+	}
+	dir := func(v string, err error) func() (string, error) {
+		return func() (string, error) { return v, err }
+	}
+	none := dir("", errors.New("no dir"))
+	cases := []struct {
+		name       string
+		goos       string
+		env        map[string]string
+		configDir  func() (string, error)
+		homeDir    func() (string, error)
+		want       string
+		wantErrSub string
+	}{
+		{
+			name:      "linux xdg wins over home",
+			goos:      "linux",
+			env:       map[string]string{"XDG_DATA_HOME": "/x", "HOME": "/h"},
+			configDir: none, homeDir: none,
+			want: "/x/mairc",
+		},
+		{
+			name:      "linux home fallback",
+			goos:      "linux",
+			env:       map[string]string{"HOME": "/h"},
+			configDir: none, homeDir: none,
+			want: filepath.Join("/h", ".local", "share", "mairc"),
+		},
+		{
+			name:      "linux without either",
+			goos:      "linux",
+			env:       map[string]string{},
+			configDir: none, homeDir: none,
+			wantErrSub: "set MAIRC_HOME, XDG_DATA_HOME or HOME",
+		},
+		{
+			name:      "darwin uses the user config dir",
+			goos:      "darwin",
+			env:       map[string]string{"HOME": "/h"},
+			configDir: dir("/Users/a/Library/Application Support", nil), homeDir: none,
+			want: filepath.Join("/Users/a/Library/Application Support", "mairc"),
+		},
+		{
+			name:      "darwin falls back to the home library",
+			goos:      "darwin",
+			env:       map[string]string{"HOME": "/Users/a"},
+			configDir: none, homeDir: dir("/Users/a", nil),
+			want: filepath.Join("/Users/a", "Library", "Application Support", "mairc"),
+		},
+		{
+			name:      "darwin without either",
+			goos:      "darwin",
+			env:       map[string]string{},
+			configDir: none, homeDir: none,
+			wantErrSub: "set MAIRC_HOME or HOME",
+		},
+		{
+			name:      "windows local app data wins",
+			goos:      "windows",
+			env:       map[string]string{"LOCALAPPDATA": `/Users/a/AppData/Local`, "XDG_DATA_HOME": "/x"},
+			configDir: dir(`C:/Users/a/AppData/Roaming`, nil), homeDir: none,
+			want: filepath.Join(`/Users/a/AppData/Local`, "mairc"),
+		},
+		{
+			name:      "windows roaming fallback",
+			goos:      "windows",
+			env:       map[string]string{},
+			configDir: dir(`C:/Users/a/AppData/Roaming`, nil), homeDir: none,
+			want: filepath.Join(`C:/Users/a/AppData/Roaming`, "mairc"),
+		},
+		{
+			name:      "windows without either",
+			goos:      "windows",
+			env:       map[string]string{},
+			configDir: none, homeDir: none,
+			wantErrSub: "set MAIRC_HOME or LOCALAPPDATA",
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got, err := dataHome(c.goos, env(c.env), c.configDir, c.homeDir)
+			if c.wantErrSub != "" {
+				if err == nil || !strings.Contains(err.Error(), c.wantErrSub) {
+					t.Fatalf("dataHome(%s) error = %v, want %q", c.goos, err, c.wantErrSub)
+				}
+				return
+			}
+			if err != nil || got != c.want {
+				t.Fatalf("dataHome(%s) = %q, %v, want %q", c.goos, got, err, c.want)
+			}
+		})
+	}
+}
+
+// MAIRC_HOME wins on every OS, and the file names are the same under it.
+func TestResolveHonoursMaircHomeOnEveryOS(t *testing.T) {
+	env := func(m map[string]string) func(string) string {
+		return func(k string) string { return m[k] }
+	}
+	dir := func(v string) func() (string, error) {
+		return func() (string, error) { return v, nil }
+	}
+	for _, goos := range []string{"linux", "darwin", "windows"} {
+		p, err := resolve(goos, env(map[string]string{
+			"MAIRC_HOME": "/m", "HOME": "/h", "XDG_DATA_HOME": "/x", "LOCALAPPDATA": "/l",
+		}), dir("/cfg"), dir("/h"))
+		if err != nil || p.Home != "/m" || p.Config != filepath.Join("/m", "config.json") ||
+			p.Token != filepath.Join("/m", "token") || p.PID != filepath.Join("/m", "daemon.pid") {
+			t.Fatalf("%s with MAIRC_HOME = %+v, %v", goos, p, err)
+		}
+	}
+}
+
 func TestEnsureHome(t *testing.T) {
 	dir := t.TempDir()
 	p := Paths{Home: filepath.Join(dir, "deep", "home")}

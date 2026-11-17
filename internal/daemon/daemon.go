@@ -15,7 +15,6 @@ import (
 	"os"
 	"strconv"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/horus14-wq/microagentIRC/internal/chat"
@@ -106,7 +105,7 @@ func run(ctx context.Context, o Options, logf func(format string, args ...any)) 
 	}
 	ln, err := net.Listen("tcp", settings.Listen)
 	if err != nil {
-		if errors.Is(err, syscall.EADDRINUSE) && healthy(ctx, settings.Listen) {
+		if isAddrInUse(err) && healthy(ctx, settings.Listen) {
 			logf("already running")
 			return nil
 		}
@@ -204,7 +203,8 @@ func (c *current) set(s core.Settings) {
 	c.mu.Unlock()
 }
 
-// ensureToken creates the token file, 32 random bytes as 64 hex characters, mode 0600, when it is missing.
+// ensureToken creates the token file, 32 random bytes as 64 hex characters, mode 0600, when it is missing. As
+// with config.json, 0600 is the Unix guarantee; on Windows the file is private because the data directory is per-user.
 func ensureToken(path string) error {
 	if _, err := os.Stat(path); err == nil {
 		return nil

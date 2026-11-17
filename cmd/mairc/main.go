@@ -16,7 +16,6 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/horus14-wq/microagentIRC/internal/config"
@@ -146,7 +145,7 @@ func isTerminal(r io.Reader) bool {
 }
 
 func runDaemon(getenv func(string) string, stderr io.Writer) int {
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	ctx, stop := signal.NotifyContext(context.Background(), shutdownSignals()...)
 	defer stop()
 	p, err := config.ResolvePaths(getenv)
 	if err == nil {
@@ -162,7 +161,7 @@ func runDaemon(getenv func(string) string, stderr io.Writer) int {
 // runStdio runs the shim. On a first run the token does not exist until the daemon has created it, and the shim
 // takes the token as it starts, so a missing token starts the daemon here and waits briefly for the file.
 func runStdio(getenv func(string) string, stdin io.Reader, stdout io.Writer) int {
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	ctx, stop := signal.NotifyContext(context.Background(), shutdownSignals()...)
 	defer stop()
 	p, err := config.ResolvePaths(getenv)
 	if err != nil {
@@ -228,7 +227,7 @@ func startDaemon(p config.Paths) error {
 	defer func() { _ = devNull.Close() }()
 	cmd := exec.Command(exe, "daemon") // #nosec G204 -- this binary, re-executed
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = devNull, logFile, logFile
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	detach(cmd)
 	if err := cmd.Start(); err != nil {
 		return err
 	}

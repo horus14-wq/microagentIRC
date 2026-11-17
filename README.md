@@ -85,8 +85,13 @@ The model makes no empty “check messages” call.
 
 ## Files and development
 
-Data lives in `$MAIRC_HOME`, else `$XDG_DATA_HOME/mairc`, else `~/.local/share/mairc/`:
-`config.json`, `mairc.db`, `token`, `daemon.log`.
+`MAIRC_HOME` wins on every OS. Without it the data directory is `~/.local/share/mairc/` on Linux and other Unix
+(honouring `XDG_DATA_HOME`), `~/Library/Application Support/mairc/` on macOS, and `%LOCALAPPDATA%\mairc\` on Windows.
+It holds `config.json`, `mairc.db`, `token`, `daemon.log` and `daemon.pid`.
+
+The directory is created `0700`; `config.json` and `token` are written `0600`, which is what privacy means on Unix.
+Windows has no file modes: those files are private because the profile directory (`%LOCALAPPDATA%`) is per-user by ACL,
+and the mode bits a Windows file reports mean nothing.
 
 For code changes, read [plan.md](plan.md), [AGENTS.md](AGENTS.md) and [docs/protocol.md](docs/protocol.md).
 Agent chat instructions: [skill/SKILL.md](skill/SKILL.md).

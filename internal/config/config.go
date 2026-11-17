@@ -10,6 +10,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 
@@ -21,21 +22,20 @@ type Paths struct {
 	Home, Config, DB, Token, Log, PID string
 }
 
-// ResolvePaths returns the paths under $MAIRC_HOME, else $XDG_DATA_HOME/mairc, else
-// $HOME/.local/share/mairc. File names: config.json, mairc.db, token, daemon.log, daemon.pid.
-// getenv is os.Getenv in production.
+// ResolvePaths returns the paths under $MAIRC_HOME, else the per-OS data directory of dataHome. File names:
+// config.json, mairc.db, token, daemon.log, daemon.pid. getenv is os.Getenv in production.
 func ResolvePaths(getenv func(string) string) (Paths, error) {
-	var home string
-	switch v := getenv("MAIRC_HOME"); {
-	case v != "":
-		home = v
-	default:
-		if x := getenv("XDG_DATA_HOME"); x != "" {
-			home = filepath.Join(x, "mairc")
-		} else if h := getenv("HOME"); h != "" {
-			home = filepath.Join(h, ".local", "share", "mairc")
-		} else {
-			return Paths{}, errors.New("no home: set MAIRC_HOME, XDG_DATA_HOME or HOME")
+	return resolve(runtime.GOOS, getenv, os.UserConfigDir, os.UserHomeDir)
+}
+
+// resolve is ResolvePaths with the OS name and the two directory lookups injected, so every rule is testable on any
+// host. MAIRC_HOME wins on every OS.
+func resolve(goos string, getenv func(string) string, userConfigDir, userHomeDir func() (string, error)) (Paths, error) {
+	home := getenv("MAIRC_HOME")
+	if home == "" {
+		var err error
+		if home, err = dataHome(goos, getenv, userConfigDir, userHomeDir); err != nil {
+			return Paths{}, err
 		}
 	}
 	return Paths{
@@ -81,7 +81,8 @@ func Load(path string) (core.Settings, error) {
 }
 
 // Save writes the settings as indented JSON, atomically (temp file in the same directory, fsync,
-// rename), mode 0600.
+// rename), mode 0600. On Windows the mode bits are not an access control: the file is private because it lives in
+// the per-user data directory (see ResolvePaths).
 func Save(path string, s core.Settings) error {
 	if err := Validate(s); err != nil {
 		return err
