@@ -123,6 +123,9 @@ type server struct {
 	named map[string]namedBy
 	// nameHost remembers which machine a name's seat is on, for hooks that ask with a machine token.
 	nameHost map[string]string
+	// reach is, per name, the shallowest depth in a hook's process chain at which the agent's own hooks (bound by
+	// session id or by its irc_name result) reached its process (noteReach). An irc_name call resets it.
+	reach    map[string]int
 	bindings core.Bindings // nil: bindings live in memory only
 }
 
@@ -150,6 +153,7 @@ func newServer(chat core.Chat, mcpServer *mcp.Server, token, version string, rel
 		bound:    make(map[string]*binding),
 		named:    make(map[string]namedBy),
 		nameHost: make(map[string]string),
+		reach:    make(map[string]int),
 		stopping: make(chan struct{}),
 	}
 }
@@ -606,9 +610,11 @@ func (s *server) nameInUse(name string) bool {
 	return false
 }
 
-// index adds delta to the count of sessions with this session's machine, pid and name. Callers hold mu.
+// index adds delta to the count of sessions with this session's machine, pid and name. An unnamed session counts
+// under "": its pid belongs to an agent that has no name yet, which stops a hook's chain walk there (mairc-qg6).
+// Callers hold mu.
 func (s *server) index(sess *session, delta int) {
-	if sess.pid <= 0 || sess.Name == "" {
+	if sess.pid <= 0 {
 		return
 	}
 	key := pidKey{host: identity.HostOf(sess.Seat), pid: sess.pid}
@@ -650,6 +656,8 @@ func (s *server) noteNamed(id, name string) {
 	s.named[name] = namedBy{
 		at: s.clock.Now(), host: identity.HostOf(sess.Seat), pid: sess.pid, seat: identity.SharedSeat(sess.Seat),
 	}
+	// A new irc_name call may come from a different process tree (a restarted CLI): its hooks set the depth anew.
+	delete(s.reach, name)
 }
 
 // bind records that the agent CLI session's hook runs for the name, in memory and, when the binding is new or
@@ -817,18 +825,27 @@ func (s *server) resolve(ctx context.Context, req hookRequest) (string, error) {
 	if !identity.ValidSession(hookSession) {
 		hookSession = ""
 	}
+	host := identity.HostOf(req.Seat)
 	if hookSession != "" {
 		// A fresh irc_name result comes first: it also covers an agent that just changed its name.
 		if req.Claimed != "" && s.claim(req, now) {
 			s.bind(ctx, hookSession, req.Claimed, now)
+			s.noteReach(host, req.Claimed, req.Pids)
 			return req.Claimed, nil
 		}
 		if name := s.boundName(ctx, hookSession, now); name != "" {
+			s.noteReach(host, name, req.Pids)
 			return name, nil
 		}
 	}
-	name := s.nameForPids(identity.HostOf(req.Seat), req.Pids)
-	if name == "" && req.Seat != "" {
+	name, depth, known := s.nameForPids(host, req.Pids)
+	if name != "" && hookSession != "" && !s.inferable(name, depth) {
+		// The agent's own hooks reach its process from closer: this is a child process's hook (mairc-qg6).
+		name = ""
+	}
+	// The seat stands in only when the process chain says nothing: a chain that reaches a live session's process
+	// decided above, and a child sharing its parent's seat must not inherit the parent's name through it.
+	if name == "" && !known && req.Seat != "" {
 		live, several := s.liveNameForSeat(req.Seat)
 		switch {
 		case several:
@@ -845,6 +862,7 @@ func (s *server) resolve(ctx context.Context, req hookRequest) (string, error) {
 	if name != "" && hookSession != "" {
 		// Learned: from now on this agent CLI session resolves by its id, whatever its process chain or seat.
 		s.bind(ctx, hookSession, name, now)
+		s.noteReach(host, name, req.Pids)
 	}
 	return name, nil
 }
@@ -886,24 +904,60 @@ func (s *server) boundName(ctx context.Context, hookSession string, now time.Tim
 	return name
 }
 
-// nameForPids returns the name of the first pid on the machine, in the order given, that live sessions of exactly
-// one name reported. A pid shared by sessions with different names is ambiguous and skipped.
-func (s *server) nameForPids(host string, pids []int) string {
-	if len(pids) == 0 {
-		return ""
-	}
+// nameForPids walks the hook's process chain on the machine, nearest first, and returns the name of the first pid
+// that live sessions of exactly one name reported, with that pid's depth in the chain. A pid whose only live sessions
+// are unnamed ends the walk unnamed: the hook belongs to that agent, which has no name yet, not to an agent further
+// up (mairc-qg6: a child agent CLI started from another agent's shell). A pid shared by sessions with different names,
+// or by named and unnamed ones, is ambiguous and skipped, as before. known reports whether the walk was decided by a
+// pid (named or unnamed), so a decided chain is not overridden through the seat.
+func (s *server) nameForPids(host string, pids []int) (name string, depth int, known bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	for _, pid := range pids {
+	for i, pid := range pids {
 		names := s.pids[pidKey{host: host, pid: pid}]
 		if len(names) != 1 {
 			continue
 		}
-		for name := range names {
-			return name
+		for n := range names {
+			return n, i, true // n == "": the agent at this pid has no name yet
 		}
 	}
-	return ""
+	return "", -1, false
+}
+
+// reachOf returns how deep in the chain the hook reaches a pid that a live session named name reported (-1 if none).
+// Callers hold mu.
+func (s *server) reachOf(host, name string, pids []int) int {
+	for i, pid := range pids {
+		if s.pids[pidKey{host: host, pid: pid}][name] > 0 {
+			return i
+		}
+	}
+	return -1
+}
+
+// noteReach records how deep the agent's own hooks (bound by session or by its irc_name result) reach its process:
+// the shallowest depth seen. An unbound hook that reaches the same process only from deeper is a child process's
+// (mairc-qg6), and is not given the name by inference.
+func (s *server) noteReach(host, name string, pids []int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	depth := s.reachOf(host, name, pids)
+	if depth < 0 {
+		return
+	}
+	if old, ok := s.reach[name]; !ok || depth < old {
+		s.reach[name] = depth
+	}
+}
+
+// inferable reports whether an unbound hook that found name at depth may take it: not when the agent's own hooks
+// reach its process from closer, which makes this hook a child process's.
+func (s *server) inferable(name string, depth int) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	own, ok := s.reach[name]
+	return !ok || depth <= own
 }
 
 // serveReload re-reads the settings file through the reload function.

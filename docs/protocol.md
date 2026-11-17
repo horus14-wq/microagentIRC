@@ -96,9 +96,14 @@ The agent is the first that applies:
 3. the name `session` is bound to;
 4. for each of `pids` in the order given (nearest ancestor first), the name of the live sessions whose
    `X-Mairc-Pid` was that pid **on the same machine** (the machine is the host part of the seat; a request and a
-   shim that both name no machine also match). A pid reported by sessions with **different** names is ambiguous
-   and skipped;
-5. the seat: the name of the sessions attached from `seat` (a session with a seat of its own counts for the seat
+   shim that both name no machine also match). A pid reported by sessions with **different** names, or by named and
+   unnamed ones, is ambiguous and skipped. A pid whose only live sessions are **unnamed** ends the walk: the request
+   is that agent's, which has no name yet, not an agent's further up the chain (an agent CLI started from another
+   agent's shell). A request with an unbound `session` that reaches a named agent's pid **deeper** in its chain than
+   that agent's own requests do (rules 2 and 3 record the depth, and an `irc_name` call resets it) is likewise a
+   child process's and gets no name;
+5. only when no pid of the chain decided rule 4: the seat: the name of the sessions attached from `seat` (a session
+   with a seat of its own counts for the seat
    its shim sent). Sessions there with **different** names make the seat ambiguous and it is skipped. With no
    named session there, the name remembered for `seat`; a seat with a machine that has no name also tries the same
    seat without the machine (the form before version 0.1.0 named machines), and moves a name found there to the

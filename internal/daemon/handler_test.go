@@ -321,7 +321,10 @@ func TestHookResolution(t *testing.T) {
 		{"first known pid", hookRequest{Pids: []int{1000, 8}, Seat: "seat-x"}, "zelda"},
 		{"ambiguous pid falls through to the next pid", hookRequest{Pids: []int{7, 8}}, "zelda"},
 		{"ambiguous pid falls through to the seat", hookRequest{Pids: []int{7}, Seat: "seat-y"}, "yvonne"},
-		{"unnamed session pid falls through to the seat", hookRequest{Pids: []int{9}, Seat: "seat-x"}, "xavier"},
+		// mairc-qg6: an agent whose own process has only an unnamed session is unnamed; it does not take another
+		// agent's name through a shared seat (this case resolved to "xavier" before).
+		{"unnamed session pid stops the walk", hookRequest{Pids: []int{9}, Seat: "seat-x"}, ""},
+		{"unnamed session pid stops before a named parent", hookRequest{Pids: []int{9, 8}, Seat: "seat-z"}, ""},
 		{"nothing known", hookRequest{Pids: []int{7, 9}, Seat: "seat-none"}, ""},
 	}
 	for _, tc := range cases {
@@ -331,6 +334,52 @@ func TestHookResolution(t *testing.T) {
 				t.Fatalf("got %q %v, want %q", got, err, tc.want)
 			}
 		})
+	}
+}
+
+// mairc-qg6: an agent CLI started from another agent's shell (a child process tree under the parent CLI, sharing its
+// seat) must not resolve to the parent's name, before its own shim attaches (only the parent's pid is known on its
+// chain, but deeper than the parent's own hooks reach it) or after (an unnamed session of its own stops the walk).
+// The parent's own hook with a new session id (/clear, resume) still resolves to the parent.
+func TestAChildAgentCLIDoesNotTakeItsParentsName(t *testing.T) {
+	f := newFixture(t, testSettings())
+	const parent, c1, c2 = 500, 520, 510
+	a := initialize(t, f.srv, "seat-p", parent)
+	if got := call(t, f.srv, a, "irc_name", `{"name":"alice"}`); got != "you are alice" {
+		t.Fatal(got)
+	}
+	resolve := func(session string, pids ...int) string {
+		t.Helper()
+		got, err := f.srv.resolve(t.Context(), hookRequest{Pids: pids, Seat: "seat-p", Session: session})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return got
+	}
+	bound := func(session string) string {
+		f.srv.mu.Lock()
+		defer f.srv.mu.Unlock()
+		if b := f.srv.bound[session]; b != nil {
+			return b.name
+		}
+		return ""
+	}
+	// The parent's own hook: its pid is the first in its chain.
+	if got := resolve("sess-a1", parent, 1); got != "alice" {
+		t.Fatalf("parent's hook resolved to %q", got)
+	}
+	// A child whose shim has not attached yet: only the parent's pid is known, two levels deeper.
+	if got := resolve("sess-child", c1, c2, parent, 1); got != "" || bound("sess-child") != "" {
+		t.Fatalf("child before its shim: %q, bound %q", got, bound("sess-child"))
+	}
+	// The child's shim attaches (its CLI is c2) unnamed: the walk stops there.
+	initialize(t, f.srv, "seat-p", c2)
+	if got := resolve("sess-child", c1, c2, parent, 1); got != "" || bound("sess-child") != "" {
+		t.Fatalf("child after its shim: %q, bound %q", got, bound("sess-child"))
+	}
+	// The parent's own hook with a new session id at the same depth (/clear) still resolves and binds.
+	if got := resolve("sess-a2", parent, 1); got != "alice" || bound("sess-a2") != "alice" {
+		t.Fatalf("parent's new session: %q, bound %q", got, bound("sess-a2"))
 	}
 }
 
@@ -419,7 +468,7 @@ func TestSeatRemembersName(t *testing.T) {
 				t.Fatalf("Session.Name %q, want %q", got, tc.wantName)
 			}
 			// The pid index learned the name at initialize, without a tool call.
-			if name := f.srv.nameForPids(identity.HostOf(tc.seat), []int{tc.pid}); name != tc.wantName {
+			if name, _, _ := f.srv.nameForPids(identity.HostOf(tc.seat), []int{tc.pid}); name != tc.wantName {
 				t.Fatalf("pid resolves to %q, want %q", name, tc.wantName)
 			}
 		})
