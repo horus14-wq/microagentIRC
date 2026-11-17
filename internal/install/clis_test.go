@@ -189,6 +189,9 @@ func TestEveryRowMergesIdempotentlyAndUninstallsExactly(t *testing.T) {
 				home, project := t.TempDir(), t.TempDir()
 				o := Options{Binary: testBinary, Scope: scope, Home: home, Project: project, Only: []string{c.name}}
 				files := c.files(scope, o)
+				if len(files) == 0 {
+					return // nothing to merge in this scope; the skip line is pinned by the row's own test
+				}
 				for _, f := range files {
 					write(t, f.path, fixtures[f.format].content, 0o600)
 				}
@@ -371,5 +374,22 @@ func TestOpenCodeRow(t *testing.T) {
 	}
 	if got := string(read(t, jsonc)); !strings.Contains(got, "// my comment") {
 		t.Fatal("the commented .jsonc was rewritten")
+	}
+}
+
+// Antigravity: the file agy's own "mcp add" writes, exactly; and project scope says it is skipped.
+func TestAntigravityRow(t *testing.T) {
+	home := t.TempDir()
+	if code, out := runRaw(Options{Binary: testBinary, Home: home, Only: []string{"agy"}}); code != 0 {
+		t.Fatalf("install = %d, %q", code, out)
+	}
+	want := "{\n  \"mcpServers\": {\n    \"mairc\": {\n      \"command\": \"" + testBinary +
+		"\",\n      \"args\": [\n        \"stdio\"\n      ]\n    }\n  }\n}\n"
+	if got := string(read(t, filepath.Join(home, ".gemini", "config", "mcp_config.json"))); got != want {
+		t.Fatalf("mcp_config.json:\n%s", got)
+	}
+	code, out := runRaw(Options{Binary: testBinary, Scope: "project", Home: home, Project: t.TempDir(), Only: []string{"agy"}})
+	if code != 0 || !strings.HasPrefix(out, "agy: no project-scope configuration, skipped\n") {
+		t.Fatalf("project scope = %d, %q", code, out)
 	}
 }

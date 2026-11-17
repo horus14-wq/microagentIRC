@@ -90,7 +90,11 @@ func Run(o Options) int {
 	}
 	var files []*target
 	for _, c := range selected {
-		for _, f := range c.files(scope, o) {
+		specs := c.files(scope, o)
+		if len(specs) == 0 {
+			_, _ = fmt.Fprintf(out, "%s: no %s-scope configuration, skipped\n", c.name, scope)
+		}
+		for _, f := range specs {
 			files = append(files, &target{path: f.path, spec: f})
 		}
 	}

@@ -42,7 +42,28 @@ type hookSpec struct {
 
 // clis returns the supported CLIs in the order they are reported.
 func clis() []cliSpec {
-	return []cliSpec{claudeCode(), codex(), grok(), devin(), openCode(), primeAgent()}
+	return []cliSpec{claudeCode(), codex(), grok(), devin(), openCode(), primeAgent(), antigravity()}
+}
+
+// antigravity is Antigravity CLI (agy 1.4.2, checked on this host 17 Nov 2026: "agy mcp add" in an empty HOME writes
+// ~/.gemini/config/mcp_config.json, mcpServers.<name> {command, args}, and "agy mcp list" reads it back; it has no
+// project scope, and ~/.gemini/mcp.json is not read). MCP only and user scope only: whether its hooks
+// (~/.gemini/config/hooks.json) reach the model is not yet researched in docs/compat.md.
+func antigravity() cliSpec {
+	return cliSpec{
+		name:     "agy",
+		binaries: []string{"agy", "antigravity"},
+		dirs:     []string{filepath.Join(".gemini", "config")},
+		files: func(scope string, o Options) []fileSpec {
+			if scope == "project" {
+				return nil
+			}
+			return []fileSpec{{
+				path: filepath.Join(o.Home, ".gemini", "config", "mcp_config.json"), format: "json",
+				server: &entrySpec{keyPath: []string{"mcpServers"}, name: "mairc", value: stdioServer},
+			}}
+		},
+	}
 }
 
 // tomlServerBlock is the marked [mcp_servers.mairc] block for a TOML config.
