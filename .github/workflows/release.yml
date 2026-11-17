@@ -103,7 +103,11 @@ jobs:
           gh release download "$GITHUB_REF_NAME" --repo "${{ github.repository }}" --pattern "${name}.${{ matrix.archive }}" --pattern SHA256SUMS --dir dl
           cd dl
           grep "${name}" SHA256SUMS > expected.txt
-          shasum -a 256 -c expected.txt
+          if command -v shasum >/dev/null 2>&1; then
+            shasum -a 256 -c expected.txt
+          else
+            sha256sum -c expected.txt
+          fi
           if [ "${{ matrix.archive }}" = "zip" ]; then
             unzip -q "${name}.zip" -d pkg
           else
