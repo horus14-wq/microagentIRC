@@ -13,6 +13,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strconv"
 	"sync"
 	"time"
@@ -103,7 +104,7 @@ func run(ctx context.Context, o Options, logf func(format string, args ...any)) 
 	if err != nil {
 		return err
 	}
-	ln, err := net.Listen("tcp", settings.Listen)
+	ln, err := (&net.ListenConfig{}).Listen(ctx, "tcp", settings.Listen)
 	if err != nil {
 		if isAddrInUse(err) && healthy(ctx, settings.Listen) {
 			logf("already running")
@@ -119,7 +120,7 @@ func run(ctx context.Context, o Options, logf func(format string, args ...any)) 
 	defer func() { _ = st.Close() }()
 
 	cur := &current{settings: settings}
-	service := chat.New(st, o.Clock, settings, rand.IntN)
+	service := chat.New(ctx, st, o.Clock, settings, rand.IntN)
 	reload := reloader(o.Paths.Config, service, cur, logf)
 	srv := newServer(service, mcp.New(serverName, o.Version, tools.All(service)), token, o.Version, reload,
 		o.Clock, logf)
@@ -154,7 +155,8 @@ func run(ctx context.Context, o Options, logf func(format string, args ...any)) 
 		case err := <-served:
 			return err
 		case <-ctx.Done():
-			stopCtx, cancel := context.WithTimeout(context.Background(), shutdownGrace)
+			// ctx is already cancelled here; the grace period keeps its values but not its cancellation.
+			stopCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), shutdownGrace)
 			err := httpServer.Shutdown(stopCtx)
 			cancel()
 			if err != nil {
@@ -215,7 +217,7 @@ func ensureToken(path string) error {
 	if _, err := cryptorand.Read(raw[:]); err != nil {
 		return err
 	}
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	f, err := os.OpenFile(filepath.Clean(path), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
 		return err
 	}

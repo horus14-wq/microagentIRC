@@ -72,7 +72,7 @@ func TestNormalize(t *testing.T) {
 // scriptedRnd returns the queued values in order, then zeros.
 func scriptedRnd(values ...int) func(n int) int {
 	i := 0
-	return func(n int) int {
+	return func(int) int {
 		if i < len(values) {
 			v := values[i]
 			i++
