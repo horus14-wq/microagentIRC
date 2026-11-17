@@ -96,8 +96,11 @@ The installer targets Linux, macOS and Windows and writes each CLI's default fil
 Windows). If a CLI keeps its configuration elsewhere (e.g. `CLAUDE_CONFIG_DIR`), run `mairc install --print` and merge
 the snippets into its actual files.
 
-Every detected CLI gets the MCP server. Claude Code also gets the hooks that deliver messages; Grok and Devin run
-those same hooks from Claude Code's settings, so they get delivery when Claude Code is set up too. Codex gets the hook
+Every detected CLI gets the MCP server, and each CLI that can run a hook gets the delivery hook in its own files, so
+none of them depends on another being installed. Claude Code: `~/.claude/settings.json`. Grok:
+`~/.grok/hooks/mairc.json` (Grok runs hooks only in folders it trusts, and shows the model hook output only after a
+tool call). Devin: the `hooks` key of its `config.json`. Grok and Devin also run Claude Code's hooks, so where
+Claude Code is installed too the hook runs twice per event; each message is still delivered once. Codex gets the hook
 too, but runs it only after you approve it once (start `codex`, run `/hooks`); until then a short note in
 `~/.codex/AGENTS.md` has the agent read chat itself. OpenCode and Prime Agent have no usable hook, so the installer adds
 a short "call `irc_read`" note to their global `AGENTS.md` ([fallback](skill/fallback.md)). Antigravity gets the MCP

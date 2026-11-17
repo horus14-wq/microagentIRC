@@ -192,8 +192,7 @@ func TestInstallOnAMachineWithManyCLIs(t *testing.T) {
 		}
 	}
 
-	// Grok and Devin also run the hooks in ~/.claude/settings.json. mairc's hook must be there once per event and in
-	// no other file either of them reads, or one message would be asked for (and paid for) twice.
+	// mairc's hook is once per event in each file that carries it, and in no file that should not.
 	assertOneHookPerEvent(t, home, installed)
 
 	// A second run is byte-identical, backups included.
@@ -257,8 +256,11 @@ func TestInstallOnAMachineWithManyCLIsAndOneCorruptFile(t *testing.T) {
 	}
 }
 
-// assertOneHookPerEvent checks that mairc's hook runs once per event for every CLI: once in Claude Code's settings
-// (which Grok and Devin also run), once in Codex's own hooks.json (which only Codex runs), and nowhere else.
+// assertOneHookPerEvent checks that mairc's hook is registered once per event in each file that carries it, and in
+// no other file: Claude Code's settings, Codex's own hooks.json, and since the Grok and Devin rows got hooks of
+// their own (a machine without Claude Code had no delivery for them) Grok's ~/.grok/hooks/mairc.json and Devin's
+// config.json. Grok and Devin also run Claude Code's settings, so with all three installed their hook runs twice
+// per event; the daemon hands each message over once, so the second run prints nothing.
 func assertOneHookPerEvent(t *testing.T, home string, files map[string]string) {
 	t.Helper()
 	for rel, content := range files {
@@ -288,11 +290,16 @@ func assertOneHookPerEvent(t *testing.T, home string, files map[string]string) {
 		} else if strings.Contains(content, "[[hooks") && strings.Contains(content, "mairc") {
 			t.Fatalf("%s: a TOML hook table next to mairc's entry", rel)
 		}
-		want := 0
-		if rel == ".claude/settings.json" || rel == ".codex/hooks.json" {
-			want = 1
-		}
 		for _, event := range hookEvents() {
+			want := 0
+			switch rel {
+			case ".claude/settings.json", ".codex/hooks.json", ".config/devin/config.json":
+				want = 1
+			case ".grok/hooks/mairc.json":
+				if event == "PostToolUse" { // the one event whose hook output Grok shows the model
+					want = 1
+				}
+			}
 			if perEvent[event] != want {
 				t.Fatalf("%s: mairc's hook on %s %d times, want %d", rel, event, perEvent[event], want)
 			}

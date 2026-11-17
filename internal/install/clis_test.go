@@ -443,6 +443,76 @@ func TestCodexGetsTheHookTheApprovalLineAndTheNote(t *testing.T) {
 	}
 }
 
+// A machine with Grok or Devin and no Claude Code still gets delivery: each has mairc's hook in a file of its own,
+// and does not depend on the one in Claude Code's settings. Before, these two rows wrote the MCP server only.
+func TestGrokAndDevinGetTheirOwnHookWithoutClaudeCode(t *testing.T) {
+	// hookedEvents returns the events on which the file runs mairc's hook, under the object at keyPath.
+	hookedEvents := func(t *testing.T, path string, keyPath []string) []string {
+		t.Helper()
+		root, err := parse(read(t, path))
+		if err != nil {
+			t.Fatalf("%s: %v", path, err)
+		}
+		hooks := walkKeys(root, keyPath)
+		var events []string
+		for i, event := range hooks.keys {
+			for _, group := range hooks.items[i].items {
+				for _, handler := range group.get("hooks").items {
+					if isOurHook(handler) {
+						events = append(events, event)
+					}
+				}
+			}
+		}
+		return events
+	}
+
+	home := t.TempDir()
+	o := Options{Binary: testBinary, Home: home, Only: []string{"grok", "devin"}}
+	code, out := runRaw(o)
+	if code != 0 || strings.Count(out, "grok: hooks run only in folders Grok trusts") != 1 {
+		t.Fatalf("install = %d, %q", code, out)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".claude")); err == nil {
+		t.Fatal("installing Grok and Devin wrote Claude Code files")
+	}
+	grokHooks := filepath.Join(home, ".grok", "hooks", "mairc.json")
+	if got := hookedEvents(t, grokHooks, []string{"hooks"}); len(got) != 1 || got[0] != "PostToolUse" {
+		t.Fatalf("Grok's hook file runs mairc's hook on %v, want PostToolUse only", got)
+	}
+	devinConfig := filepath.Join(home, ".config", "devin", "config.json")
+	if got := hookedEvents(t, devinConfig, []string{"hooks"}); strings.Join(got, ",") != strings.Join(hookEvents(), ",") {
+		t.Fatalf("Devin's config runs mairc's hook on %v, want %v", got, hookEvents())
+	}
+	for _, s := range Statuses(o) {
+		if !s.HookPresent {
+			t.Fatalf("%s: doctor sees no hook: %+v", s.Name, s)
+		}
+	}
+	if code, out := runRaw(o); code != 0 || out != "already installed\n" {
+		t.Fatalf("second install = %d, %q", code, out)
+	}
+	o.Uninstall = true
+	if code, out := runRaw(o); code != 0 {
+		t.Fatalf("uninstall = %d, %q", code, out)
+	}
+	for _, path := range []string{grokHooks, filepath.Dir(grokHooks), devinConfig} {
+		if _, err := os.Stat(path); err == nil {
+			t.Fatalf("%s, which mairc created, is still there after uninstall", path)
+		}
+	}
+
+	// Project scope: Devin's hooks file is the hooks object itself.
+	project := t.TempDir()
+	runRaw(Options{Binary: testBinary, Scope: "project", Home: t.TempDir(), Project: project, Only: []string{"grok", "devin"}})
+	if got := hookedEvents(t, filepath.Join(project, ".devin", "hooks.v1.json"), nil); len(got) != len(hookEvents()) {
+		t.Fatalf("project .devin/hooks.v1.json runs mairc's hook on %v", got)
+	}
+	if got := hookedEvents(t, filepath.Join(project, ".grok", "hooks", "mairc.json"), []string{"hooks"}); len(got) != 1 {
+		t.Fatalf("project .grok/hooks/mairc.json runs mairc's hook on %v", got)
+	}
+}
+
 // A config that is a symlink (dotfile managers; Devin's global AGENTS.md links to Codex's on some machines) is changed
 // where it lives: the link stays a link, the target gains mairc's entry, the backup is the target's.
 func TestSymlinkedConfigStaysALink(t *testing.T) {

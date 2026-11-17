@@ -109,8 +109,14 @@ func codex() cliSpec {
 }
 
 // grok is Grok Build (docs/compat.md, "Grok Build", 1.0.70): MCP servers in ~/.grok/config.toml (or
-// <project>/.grok/config.toml), table [mcp_servers.<name>] with command/args. MCP only: Grok also runs the hooks in
-// Claude Code's settings files (trusted folders), so the Claude row's hook reaches Grok seats.
+// <project>/.grok/config.toml), table [mcp_servers.<name>] with command/args.
+//
+// Hooks: Grok reads every ~/.grok/hooks/*.json (or <project>/.grok/hooks/*.json), in Claude Code's format, so mairc
+// has a file of its own there. Grok puts a hook's output in front of the model only on PostToolUse (JSON
+// additionalContext), so that is the one event registered. Grok runs user hooks only in a trusted folder. Without
+// this file a machine that has Grok and no Claude Code got no delivery at all: Grok also runs the hooks in Claude
+// Code's settings files, and that was the only way the hook reached it. Where both exist the hook runs twice per
+// tool call; the daemon hands each message over once, so the second run prints nothing.
 func grok() cliSpec {
 	return cliSpec{
 		name:     "grok",
@@ -121,32 +127,52 @@ func grok() cliSpec {
 			if scope == "project" {
 				base = o.Project
 			}
-			return []fileSpec{{
-				path: filepath.Join(base, ".grok", "config.toml"), format: "block", block: tomlServerBlock(),
-			}}
+			return []fileSpec{
+				{path: filepath.Join(base, ".grok", "config.toml"), format: "block", block: tomlServerBlock()},
+				{
+					path: filepath.Join(base, ".grok", "hooks", "mairc.json"), format: "json",
+					hooks: &hookSpec{
+						keyPath: []string{"hooks"}, events: []string{"PostToolUse"}, handler: hookHandler, ours: isOurHook,
+					},
+					notice: "grok: hooks run only in folders Grok trusts (/hooks-trust, or start it with --trust)",
+				},
+			}
 		},
 	}
 }
 
 // devin is Devin CLI (docs/compat.md, "Devin CLI", 3000.13.4): MCP servers in ~/.config/devin/mcp_config.json (user;
-// %APPDATA%\devin on Windows) or <project>/.devin/mcp_config.json, key mcpServers, stdio entries command/args. MCP
-// only: Devin also runs the hooks in Claude Code's settings files, so the Claude row's hook reaches Devin seats.
+// %APPDATA%\devin on Windows) or <project>/.devin/mcp_config.json, key mcpServers, stdio entries command/args.
+//
+// Hooks: the `hooks` key of ~/.config/devin/config.json (user), or the whole of <project>/.devin/hooks.v1.json
+// (project), in Claude Code's format. Devin injects JSON additionalContext on SessionStart, UserPromptSubmit and
+// PostToolUse. Without this a machine that has Devin and no Claude Code got no delivery: Devin also runs the hooks
+// in Claude Code's settings files, and that was the only way the hook reached it. Where both exist the hook runs
+// twice per event; the daemon hands each message over once. The Windows location of config.json is taken to be
+// beside mcp_config.json (not checked on a Windows machine).
 func devin() cliSpec {
 	return cliSpec{
 		name:     "devin",
 		binaries: []string{"devin"},
 		dirs:     []string{filepath.Join(".config", "devin")},
 		files: func(scope string, o Options) []fileSpec {
-			path := filepath.Join(o.Home, ".config", "devin", "mcp_config.json")
+			dir := filepath.Join(o.Home, ".config", "devin")
 			if o.GOOS == "windows" {
-				path = filepath.Join(o.Home, "AppData", "Roaming", "devin", "mcp_config.json")
+				dir = filepath.Join(o.Home, "AppData", "Roaming", "devin")
 			}
+			hooksPath, hooksKey := filepath.Join(dir, "config.json"), []string{"hooks"}
 			if scope == "project" {
-				path = filepath.Join(o.Project, ".devin", "mcp_config.json")
+				dir = filepath.Join(o.Project, ".devin")
+				hooksPath, hooksKey = filepath.Join(dir, "hooks.v1.json"), nil // the file is the hooks object
 			}
-			return []fileSpec{{path: path, format: "json", server: &entrySpec{
-				keyPath: []string{"mcpServers"}, name: "mairc", value: stdioServer,
-			}}}
+			return []fileSpec{
+				{path: filepath.Join(dir, "mcp_config.json"), format: "json", server: &entrySpec{
+					keyPath: []string{"mcpServers"}, name: "mairc", value: stdioServer,
+				}},
+				{path: hooksPath, format: "json", hooks: &hookSpec{
+					keyPath: hooksKey, events: hookEvents(), handler: hookHandler, ours: isOurHook,
+				}},
+			}
 		},
 	}
 }
