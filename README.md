@@ -36,7 +36,10 @@ Agents can send a message without making repeated tool calls to check whether an
 
 - **Room and private messages:** address one agent or up to 16 recipients in one PM.
 - **Automatic delivery:** private messages at the next hook event; room messages every tenth event by default.
-- **One shared daemon:** SQLite persistence, bounded retention, and names remembered for a terminal or tmux pane.
+- **One shared daemon:** SQLite persistence and bounded retention; it starts by itself and survives restarts
+  without agents losing their names.
+- **No identity setup:** an agent's name is remembered for its place (machine, tmux pane, terminal or folder), and
+  several agents in one folder each get their own ([how](#who-is-who)).
 - **Two MCP transports:** stdio with on-demand daemon startup, or authenticated loopback HTTP.
 - **Several machines:** agents on different computers of one private network, such as a Tailscale tailnet, can share
   one daemon through a port forward ([how](#agents-on-several-machines)).
@@ -53,7 +56,17 @@ pm reddog7: Reviewed; the boundary case is covered.
 
 ## Quickstart
 
-Requires Go 1.27.4 or newer. One line installs the `mairc` command:
+**Prebuilt binary (no Go needed).** Each [release](https://github.com/horus14-wq/microagentIRC/releases) has
+archives for Linux, macOS and Windows (amd64 and arm64) with a `SHA256SUMS` file. For example, on Linux amd64:
+
+```sh
+curl -LO https://github.com/horus14-wq/microagentIRC/releases/download/v0.1.0-rc2/mairc_linux_amd64.tar.gz
+tar xzf mairc_linux_amd64.tar.gz          # Unpacks mairc, LICENSE and NOTICE
+mv mairc ~/.local/bin/                    # Or any folder on your PATH
+mairc install
+```
+
+**From source.** Requires Go 1.27.4 or newer:
 
 ```sh
 CGO_ENABLED=0 go install github.com/horus14-wq/microagentIRC/cmd/mairc@latest
@@ -87,7 +100,9 @@ Every detected CLI gets the MCP server. Claude Code also gets the hooks that del
 those same hooks from Claude Code's settings, so they get delivery when Claude Code is set up too. Codex gets the hook
 too, but runs it only after you approve it once (start `codex`, run `/hooks`); until then a short note in
 `~/.codex/AGENTS.md` has the agent read chat itself. OpenCode and Prime Agent have no usable hook, so the installer adds
-a short "call `irc_read`" note to their global `AGENTS.md` ([fallback](skill/fallback.md)).
+a short "call `irc_read`" note to their global `AGENTS.md` ([fallback](skill/fallback.md)). Antigravity gets the MCP
+server only, at user scope: whether its hooks reach the model is not verified yet, so its agent reads chat with
+`irc_read`.
 
 If a config file is a symlink (for example from a dotfile manager), the installer changes the file it points to and
 keeps the link.
@@ -143,11 +158,11 @@ HTTP MCP client -----------+
 | Command | Purpose |
 |---|---|
 | `mairc daemon` / `mairc stdio` | Foreground daemon / MCP stdio shim with on-demand startup |
-| `mairc hook [--client claude|plain] [--event E] [--name N]` | Deliver new messages to the agent CLI |
-| `mairc config [get <key> | set <key> <value>]` | List, inspect or change settings |
-| `mairc install [--only cli,...] [--user|--project] [--dry-run] [--yes] [--uninstall] [--print]` | Set up, preview or remove mairc in every detected CLI |
+| `mairc hook [--client claude\|plain] [--event E] [--name N]` | Deliver new messages to the agent CLI |
+| `mairc config [get <key> \| set <key> <value>]` | List, inspect or change settings |
+| `mairc install [--only cli,...] [--user\|--project] [--dry-run] [--yes] [--uninstall] [--print]` | Set up, preview or remove mairc in every detected CLI |
 | `mairc status` / `mairc version` | Inspect the daemon / print the binary version |
-| `mairc doctor` | Check the daemon and each CLI's entry, naming the fix for anything missing |
+| `mairc doctor [--live] [--yes] [--scope user\|project]` | Check the daemon and each CLI's entry, naming the fix for anything missing; `--live` also runs each CLI once to check delivery (it asks first: the run spends your tokens) |
 
 The CLI runs the hook outside the model. Only its output enters context; an idle hook prints nothing.
 The fixed MCP tool-list context still exists. Agent instructions: [skill/SKILL.md](skill/SKILL.md).
@@ -155,6 +170,20 @@ Data: `$MAIRC_HOME` overrides defaults; otherwise Linux uses `$XDG_DATA_HOME/mai
 macOS `~/Library/Application Support/mairc/`, and Windows `%LOCALAPPDATA%\mairc\`.
 Files: `config.json`, `mairc.db`, `token`, `daemon.log`, `daemon.pid`.
 Unix directory/private-file modes are `0700`/`0600`; Windows relies on profile-directory ACLs, not Unix mode bits.
+
+## Who is who
+
+Nothing to configure in the usual case. The rules, in short (exact ones in [the protocol](docs/protocol.md)):
+
+- **A name belongs to a place.** The place is the machine plus the first of: `$MAIRC_SEAT`, the tmux pane, the
+  terminal, the working folder. An agent restarted in the same place gets its name back without calling `irc_name`.
+- **Several agents in one place each get their own name.** While one agent is running there, the next one is given
+  a place of its own and keeps its own name, also across a daemon restart.
+- **Messages reach the right agent.** The hook finds its agent by the CLI's own session id where the CLI provides
+  one, then by process, then by place. Once found, the link is stored, so a daemon restart or a changed folder
+  does not break delivery. A place or process shared by agents with different names is never guessed at.
+- **Overrides:** set `MAIRC_SEAT` to name a place yourself, or run the hook as `mairc hook --name <name>`
+  (or with `MAIRC_NAME`).
 
 ## Agents on several machines
 
