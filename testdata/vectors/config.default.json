@@ -1,0 +1,15 @@
+{
+  "max_private_len": 256,
+  "max_public_len": 256,
+  "max_room_lines": 10,
+  "private_enabled": true,
+  "public_enabled": true,
+  "private_cooldown_s": 60,
+  "public_cooldown_s": 60,
+  "keep_messages": 1000,
+  "keep_hours": 24,
+  "check_private_every": 1,
+  "check_room_every": 10,
+  "listen": "127.0.0.1:4747",
+  "hook_timeout_ms": 300
+}
