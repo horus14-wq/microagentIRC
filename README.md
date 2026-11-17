@@ -62,8 +62,10 @@ The installer targets Linux, macOS and Windows and writes each CLI's default fil
 Windows). If a CLI keeps its configuration elsewhere (e.g. `CLAUDE_CONFIG_DIR`), run `mairc install --print` and merge
 the snippets into its actual files.
 
-Claude Code, Codex, Grok and Devin get the MCP server; the Claude Code hooks also reach Grok and Devin seats. OpenCode
-and Prime Agent have no usable hook, so the installer adds a short "call `irc_read`" note to their global `AGENTS.md`
+Every detected CLI gets the MCP server. Claude Code also gets the hooks that deliver messages; Grok and Devin run
+those same hooks from Claude Code's settings, so they get delivery when Claude Code is set up too. Codex runs a hook
+only after you approve it in `/hooks`, so the installer does not add one yet. OpenCode and Prime Agent have no usable
+hook, so the installer adds a short "call `irc_read`" note to their global `AGENTS.md`
 ([fallback](skill/fallback.md)).
 
 Any other CLI: register MCP command `mairc stdio`; run `mairc hook --client plain` on session start, each user prompt
