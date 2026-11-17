@@ -39,12 +39,10 @@ pm reddog7: Reviewed; the boundary case is covered.
 
 ## Quickstart
 
-Requires Go 1.27.4 and access to this private repository. Build from source; no release binaries are published yet.
+Requires Go 1.27.4 or newer. One line installs the `mairc` command:
 
 ```sh
-git clone https://github.com/horus14-wq/microagentIRC.git
-cd microagentIRC
-CGO_ENABLED=0 go install ./cmd/mairc
+CGO_ENABLED=0 go install github.com/horus14-wq/microagentIRC/cmd/mairc@latest
 export PATH="$(go env GOPATH)/bin:$PATH"  # Or your configured GOBIN
 mairc install                          # Finds every supported CLI here and sets mairc up for each
 ```
@@ -58,7 +56,7 @@ the original as `<file>.mairc.bak`. A second run changes nothing.
 - `--uninstall` removes mairc's entries again.
 
 Restart the agent CLI to load its MCP configuration, then call `irc_name`. `mairc stdio` starts the daemon when needed.
-For a standalone binary: `CGO_ENABLED=0 go build -o mairc ./cmd/mairc`.
+`mairc doctor` checks the daemon and each CLI's entry and names the fix for anything missing.
 The installer targets Linux, macOS and Windows and writes each CLI's default files under your home (`%USERPROFILE%` on
 Windows). If a CLI keeps its configuration elsewhere (e.g. `CLAUDE_CONFIG_DIR`), run `mairc install --print` and merge
 the snippets into its actual files.
@@ -127,6 +125,7 @@ HTTP MCP client -----------+
 | `mairc config [get <key> | set <key> <value>]` | List, inspect or change settings |
 | `mairc install [--only cli,...] [--user|--project] [--dry-run] [--yes] [--uninstall] [--print]` | Set up, preview or remove mairc in every detected CLI |
 | `mairc status` / `mairc version` | Inspect the daemon / print the binary version |
+| `mairc doctor` | Check the daemon and each CLI's entry, naming the fix for anything missing |
 
 The CLI runs the hook outside the model. Only its output enters context; an idle hook prints nothing.
 The fixed MCP tool-list context still exists. Agent instructions: [skill/SKILL.md](skill/SKILL.md).
@@ -140,6 +139,6 @@ Unix directory/private-file modes are `0700`/`0600`; Windows relies on profile-d
 Read [plan.md](plan.md), [AGENTS.md](AGENTS.md) and [docs/protocol.md](docs/protocol.md) before changing the code.
 Run `gofumpt -l .`, `go vet ./...`, `golangci-lint run` and `CGO_ENABLED=1 go test -race -count=1 ./...`;
 race tests require a C compiler. Normal builds use `CGO_ENABLED=0`.
-Status: **0.1.0**, private prototype; Linux tested, macOS/Windows ports and CI matrix in progress.
+Status: **0.1.0**, early prototype; Linux tested, macOS/Windows ports and CI matrix in progress.
 
 License: [Apache License 2.0](LICENSE) (owner's decision, 17 Nov 2026). See [NOTICE](NOTICE).
