@@ -190,7 +190,7 @@ func runStdio(getenv func(string) string, stdin io.Reader, stdout io.Writer) int
 		Token:       token,
 		Seat:        identity.HostSeat(identity.Seat(getenv, identity.ControllingTTY, os.Getwd), os.Hostname),
 		AgentPID:    os.Getppid(),
-		Session:     identity.SessionFromEnv(getenv),
+		Session:     shimSession(getenv),
 		In:          stdin,
 		Out:         stdout,
 		StartDaemon: start,
@@ -584,6 +584,15 @@ func runDoctor(args []string, getenv func(string) string, stdin io.Reader, stdou
 		confirm = askSpend(stdin, stdout, *assumeYes)
 	}
 	return doctor.Run(doctor.Options{Out: stdout, Daemon: base, CLIs: statuses, Probes: probes, Live: *live, Spend: confirm})
+}
+
+// shimSession is the agent CLI session the shim reports: the one the CLI put in the environment, else, under Prime
+// Agent, "prime-agent:<agent id>" from its REPL kernel (the daemon's bridge delivers to that agent, mairc-byd).
+func shimSession(getenv func(string) string) string {
+	if session := identity.SessionFromEnv(getenv); session != "" {
+		return session
+	}
+	return identity.PrimeAgentSession(os.Getpid(), identity.ParentOf, identity.EnvOf)
 }
 
 // listenOr falls back to the default listen address when the settings file does not name one.

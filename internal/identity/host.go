@@ -1,6 +1,9 @@
 package identity
 
-import "strings"
+import (
+	"strconv"
+	"strings"
+)
 
 // A seat is unique on one machine only: two machines can both have a pane "%1" or a terminal "/dev/pts/3". A
 // host-qualified seat puts the machine in front: "@buildbox/tmux:%12". The leading "@" tells it apart from a seat
@@ -133,4 +136,44 @@ func isHex(s string) bool {
 		}
 	}
 	return true
+}
+
+// Prime Agent sets these in its worker and REPL kernel: the id of the agent they run for (the id `prime-agent list`
+// shows and `prime-agent send` takes), and the pid of the worker that owns the kernel. The kernel starts MCP servers
+// with a reduced environment, so the shim reads them from its parent (docs/compat.md, "Prime Agent").
+const (
+	primeAgentEnv      = "PRIME_AGENT_INTERNAL_DAEMON_WORKER_ACTIVE_SESSION_ID"
+	primeAgentOwnerEnv = "PRIME_AGENT_KERNEL_OWNER_PID"
+)
+
+// PrimeAgentSession returns "prime-agent:<id>" when the shim's parent is a Prime Agent REPL kernel, or "". The parent
+// must be the kernel itself, not merely a process that inherited Prime Agent's environment: its owner pid must be its
+// own parent (the worker). A CLI started from Prime Agent's shell inherits the variables too, and its shim must not
+// take the Prime agent's deliveries (the mairc-qg6 lesson). parentOf and envOf are ParentOf and EnvOf in production.
+func PrimeAgentSession(self int, parentOf func(int) (int, bool), envOf func(pid int, name string) (string, bool)) string {
+	kernel, ok := parentOf(self)
+	if !ok {
+		return ""
+	}
+	worker, ok := parentOf(kernel)
+	if !ok {
+		return ""
+	}
+	if owner, ok := envOf(kernel, primeAgentOwnerEnv); !ok || owner != strconv.Itoa(worker) {
+		return ""
+	}
+	if id, ok := envOf(kernel, primeAgentEnv); ok && id != "" && ValidSession("prime-agent:"+id) {
+		return "prime-agent:" + id
+	}
+	return ""
+}
+
+// envValue returns name's value from a NUL-separated environment block (/proc/<pid>/environ).
+func envValue(block, name string) (string, bool) {
+	for entry := range strings.SplitSeq(block, "\x00") {
+		if value, ok := strings.CutPrefix(entry, name+"="); ok {
+			return value, true
+		}
+	}
+	return "", false
 }

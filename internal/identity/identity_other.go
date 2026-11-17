@@ -13,3 +13,8 @@ func ControllingTTY() (string, bool) {
 func ParentOf(int) (int, bool) {
 	return 0, false
 }
+
+// EnvOf answers ok=false on a system with no process-fact reader.
+func EnvOf(int, string) (string, bool) {
+	return "", false
+}

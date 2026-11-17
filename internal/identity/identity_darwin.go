@@ -32,3 +32,8 @@ func ControllingTTY() (string, bool) {
 func ParentOf(pid int) (int, bool) {
 	return parentOf(pid, psCommand)
 }
+
+// EnvOf answers ok=false on macOS: another process's environment is not readable there without privileges.
+func EnvOf(int, string) (string, bool) {
+	return "", false
+}

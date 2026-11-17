@@ -60,3 +60,13 @@ func parseStatPpid(stat string) (int, bool) {
 	}
 	return ppid, true
 }
+
+// EnvOf returns the value of the environment variable name in process pid's starting environment, read from
+// /proc/<pid>/environ (readable for the user's own processes). ok=false when it is unset or unreadable.
+func EnvOf(pid int, name string) (string, bool) {
+	raw, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/environ")
+	if err != nil {
+		return "", false
+	}
+	return envValue(string(raw), name)
+}

@@ -28,6 +28,8 @@ type Status struct {
 	// Fallback: the instruction file that carries the "read chat yourself" note for a CLI with no hook.
 	FallbackPath    string
 	FallbackPresent bool
+	// Bridge names how mairc's daemon delivers chat to this CLI when it has no hook (Prime Agent); "" for none.
+	Bridge string
 
 	Problem string // the first file that could not be read or parsed, and why
 }
@@ -58,7 +60,7 @@ func (s Status) configured() bool { return s.MCPPresent || s.HookPresent || s.Fa
 
 // statusOf reads one CLI's files.
 func statusOf(c cliSpec, scope string, o Options) Status {
-	s := Status{Name: c.name, Detected: detect(c, o), Binary: binaryOnPath(o.LookPath, c.binaries)}
+	s := Status{Name: c.name, Detected: detect(c, o), Binary: binaryOnPath(o.LookPath, c.binaries), Bridge: c.bridge}
 	for _, f := range c.files(scope, o) {
 		raw, err := os.ReadFile(f.path) // #nosec G304 -- the CLI's own configuration file, named by the table
 		if err != nil && !errors.Is(err, fs.ErrNotExist) {

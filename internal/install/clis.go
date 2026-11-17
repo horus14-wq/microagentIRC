@@ -16,6 +16,8 @@ type cliSpec struct {
 	binaries []string // detected when one of these is on PATH
 	dirs     []string // ... or when one of these exists under the home directory
 	files    func(scope string, o Options) []fileSpec
+	// bridge names how chat reaches a CLI that has no hook but is delivered to by mairc's daemon itself; "" for none.
+	bridge string
 }
 
 // A fileSpec is one configuration file and what mairc owns in it.
@@ -231,6 +233,8 @@ func primeAgent() cliSpec {
 		name:     "prime-agent",
 		binaries: []string{"prime-agent"},
 		dirs:     []string{filepath.Join(".prime", "agent")},
+		// mairc-byd: the daemon hands each named Prime Agent agent its chat with `prime-agent send --follow-up`.
+		bridge: "the daemon's bridge (prime-agent send --follow-up)",
 		files: func(scope string, o Options) []fileSpec {
 			base := o.Home
 			if scope == "project" {

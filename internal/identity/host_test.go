@@ -134,3 +134,39 @@ func TestOwnSeats(t *testing.T) {
 		t.Fatalf("an own seat keeps its machine: %q %q", HostOf(own), Legacy(own))
 	}
 }
+
+// mairc-byd: the shim takes Prime Agent's agent id only from Prime Agent's REPL kernel itself (its parent, whose
+// owner pid is the kernel's own parent, the worker), never from a CLI started in Prime Agent's shell, which inherits
+// the same variables.
+func TestPrimeAgentSessionComesOnlyFromTheKernel(t *testing.T) {
+	parents := map[int]int{100: 90, 90: 80, 200: 190, 190: 180, 180: 90}
+	parentOf := func(pid int) (int, bool) {
+		p, ok := parents[pid]
+		return p, ok
+	}
+	env := map[int]map[string]string{
+		// The kernel (90), owned by its parent worker (80).
+		90: {primeAgentEnv: "d9bcc8147c3a", primeAgentOwnerEnv: "80"},
+		// A CLI (190) started from a shell (180) under the kernel inherited the kernel's variables.
+		190: {primeAgentEnv: "d9bcc8147c3a", primeAgentOwnerEnv: "80"},
+	}
+	envOf := func(pid int, name string) (string, bool) {
+		v, ok := env[pid][name]
+		return v, ok
+	}
+	if got := PrimeAgentSession(100, parentOf, envOf); got != "prime-agent:d9bcc8147c3a" {
+		t.Errorf("shim under the kernel: %q", got)
+	}
+	if got := PrimeAgentSession(200, parentOf, envOf); got != "" {
+		t.Errorf("shim of a CLI started in Prime Agent's shell: %q, want none", got)
+	}
+	if got := PrimeAgentSession(300, parentOf, envOf); got != "" {
+		t.Errorf("no parent: %q", got)
+	}
+	if v, ok := envValue("A=1\x00PRIME_AGENT_KERNEL_OWNER_PID=80\x00B=2\x00", primeAgentOwnerEnv); !ok || v != "80" {
+		t.Errorf("envValue = %q %v", v, ok)
+	}
+	if _, ok := envValue("A=1\x00", primeAgentOwnerEnv); ok {
+		t.Error("envValue found a missing variable")
+	}
+}

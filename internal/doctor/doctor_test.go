@@ -329,3 +329,17 @@ func TestHookNeedingApprovalIsNotPlainOk(t *testing.T) {
 		t.Errorf("output still says plain ok:\n%s", out)
 	}
 }
+
+// mairc-byd: a CLI the daemon delivers to itself (Prime Agent's bridge) says so instead of "calls irc_read".
+func TestBridgedCLISaysHowChatArrives(t *testing.T) {
+	s := fake(t, "prime-agent", true, false, true)
+	s.Bridge = "the daemon's bridge (prime-agent send --follow-up)"
+	out, code := runOne(t, s, healthyDaemon())
+	if code != 0 {
+		t.Fatalf("exit = %d, want 0; output:\n%s", code, out)
+	}
+	want := "prime-agent: MCP ok — no hook; chat arrives through the daemon's bridge (prime-agent send --follow-up) while the daemon runs"
+	if !strings.Contains(out, want) {
+		t.Errorf("output lacks %q:\n%s", want, out)
+	}
+}

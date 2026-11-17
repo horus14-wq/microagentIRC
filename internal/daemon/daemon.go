@@ -13,6 +13,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"sync"
@@ -155,6 +156,10 @@ func run(ctx context.Context, o Options, logf func(format string, args ...any)) 
 	served := make(chan error, 1)
 	go func() { served <- httpServer.Serve(ln) }()
 	logf("start %s %s", o.Version, settings.Listen)
+	// mairc-byd: Prime Agent has no hooks; when it is installed, the daemon delivers to its agents itself.
+	if bin, err := exec.LookPath("prime-agent"); err == nil {
+		go srv.runBridge(ctx, primeAgentSender(bin))
+	}
 
 	ticker := time.NewTicker(pruneEvery)
 	defer ticker.Stop()

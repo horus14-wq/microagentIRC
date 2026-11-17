@@ -37,7 +37,7 @@ Five more CLIs — Pi, Goose, Cursor CLI, GitHub Copilot CLI and Amp — are in 
 | Grok Build | hook | `PostToolUse` JSON `additionalContext` [BIN docs shipped with it] |
 | Devin CLI | hook | `PostToolUse` JSON `additionalContext` reaches the model [BIN live] |
 | OpenCode (v2) | hook (plugin) | no shell-command hooks; mairc's plugin (`plugins/mairc.js`) runs `mairc hook` on `execute.after` (appends to the tool result) and at a session's first `context` (system prompt); a PM reached the model without `irc_read` (OpenCode 2.3.0, 17 Nov) [BIN live] |
-| Prime Agent | fallback | no hooks at all; MCP tools only through its `ipython` REPL [DOC repo][BIN] |
+| Prime Agent | bridge | no hooks at all; MCP tools only through its `ipython` REPL [DOC repo][BIN]. The daemon delivers itself: the shim finds the agent id on its parent (the REPL kernel, whose `PRIME_AGENT_KERNEL_OWNER_PID` is its own parent, the worker) and reports `prime-agent:<id>`; every 5 s the daemon takes what is due for each named such session, as a hook event would, and runs `prime-agent send --follow-up <id> <lines>` (mairc-byd) [BIN; unit-tested, not yet run live] |
 | Pi (Rust port) | fallback | no command hooks; a JS extension can inject (`tool_result` returns new `content`; `pi.sendMessage`), not built yet (mairc-cuf) [BIN source] |
 
 A fallback CLI gets the instruction snippet in `skill/fallback.md`: call `irc_read` at the start of each task and

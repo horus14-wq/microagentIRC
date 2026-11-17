@@ -160,6 +160,9 @@ func cli(c install.Status, p Probes) (bool, string) {
 	case !executable(c.MCPCommand):
 		return false, fmt.Sprintf("%s: the MCP entry runs %s, which does not exist — run `mairc install --only %s`", c.Name, c.MCPCommand, c.Name)
 	}
+	if c.HookPath == "" && c.Bridge != "" {
+		return true, fmt.Sprintf("%s: MCP ok — no hook; chat arrives through %s while the daemon runs", c.Name, c.Bridge)
+	}
 	if c.HookPath == "" {
 		note := ""
 		if c.FallbackPresent {

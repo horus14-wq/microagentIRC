@@ -87,3 +87,9 @@ func startedAt(pid uint32) uint64 {
 	}
 	return uint64(created.HighDateTime)<<32 | uint64(created.LowDateTime)
 }
+
+// EnvOf answers ok=false on Windows: Prime Agent's bridge reads the environment of an ancestor process, which this
+// build does not do there.
+func EnvOf(int, string) (string, bool) {
+	return "", false
+}
