@@ -225,6 +225,24 @@ func TestHookDeliversThroughTheDaemon(t *testing.T) {
 	}
 }
 
+// The Claude Code hook entry run by Grok: on UserPromptSubmit (output discarded by Grok) the daemon is not asked, so
+// the message stays unread; on PostToolUse it is delivered as JSON.
+func TestHookUnderGrokConsumesOnlyWhatGrokDelivers(t *testing.T) {
+	f := &fakeDaemon{hook: "#main greenfox1: hi"}
+	env := map[string]string{
+		"MAIRC_HOME": home(t, startFake(t, f), true), "MAIRC_NAME": "bluecat2", "GROK_HOOK_EVENT": "UserPromptSubmit",
+	}
+	code, out, errOut := runWith([]string{"hook", "--client", "claude", "--event", "UserPromptSubmit"}, env, nil)
+	if code != 0 || out != "" || errOut != "" || f.seen("POST /v1/hook") {
+		t.Fatalf("UserPromptSubmit under Grok = %d, stdout %q, stderr %q, calls %v", code, out, errOut, f.calls)
+	}
+	env["GROK_HOOK_EVENT"] = "PostToolUse"
+	code, out, _ = runWith([]string{"hook", "--client", "claude", "--event", "PostToolUse"}, env, nil)
+	if code != 0 || !strings.Contains(out, `"additionalContext":"irc:\n#main greenfox1: hi"`) {
+		t.Fatalf("PostToolUse under Grok = %d, stdout %q", code, out)
+	}
+}
+
 func TestConfigSetReloadsTheDaemon(t *testing.T) {
 	f := &fakeDaemon{reload: http.StatusNoContent}
 	env := map[string]string{"MAIRC_HOME": home(t, startFake(t, f), true)}

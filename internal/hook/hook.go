@@ -43,9 +43,34 @@ const (
 	HostDevin = "devin"
 )
 
-// HostFrom names the CLI running the hook from its environment.
+// HostFrom names the CLI running the hook from the environment it sets for hooks: Grok sets GROK_HOOK_EVENT for every
+// hook it runs, Devin sets DEVIN_PROJECT_DIR (docs/compat.md). CLAUDE_* variables are not used: Devin seats inherit
+// them from a Claude Code parent. GROK_HOOK_EVENT wins because it is set per hook run, not inherited by a shell.
 func HostFrom(getenv func(string) string) string {
+	switch {
+	case getenv("GROK_HOOK_EVENT") != "":
+		return HostGrok
+	case getenv("DEVIN_PROJECT_DIR") != "":
+		return HostDevin
+	}
 	return ""
+}
+
+// hostDelivers reports whether the host CLI puts this event's hook output in front of the model. When it does not,
+// the hook must not ask the daemon: the daemon hands a delivery over when asked, and a dropped delivery is a lost
+// message.
+//   - Grok: only PreToolUse/PostToolUse JSON additionalContext; UserPromptSubmit stdout is discarded, SessionStart
+//     output is a user-only systemMessage (docs/compat.md, Grok (c)).
+//   - Devin: JSON additionalContext on SessionStart, UserPromptSubmit and PostToolUse; plain stdout is dropped
+//     (docs/compat.md, Devin (c), live test).
+func hostDelivers(host, event string) bool {
+	switch host {
+	case HostGrok:
+		return event == "PostToolUse" || event == "PreToolUse"
+	case HostDevin:
+		return event == "SessionStart" || event == "UserPromptSubmit" || event == "PostToolUse"
+	}
+	return true
 }
 
 // request is the body of POST /v1/hook.
@@ -62,11 +87,18 @@ func Run(ctx context.Context, o Options) int {
 	if event == "" {
 		event = eventFromStdin(o.Stdin)
 	}
+	if !hostDelivers(o.Host, event) {
+		return 0
+	}
 	body, ok := ask(ctx, o, event)
 	if !ok || o.Stdout == nil {
 		return 0
 	}
-	_, _ = io.WriteString(o.Stdout, format(o.Client, event, body))
+	client := o.Client
+	if o.Host != "" {
+		client = "json" // Grok and Devin read only the JSON form, on every event they deliver
+	}
+	_, _ = io.WriteString(o.Stdout, format(client, event, body))
 	return 0
 }
 
@@ -150,12 +182,18 @@ type claudeSpecific struct {
 //     `{"hookSpecificOutput":{"hookEventName":"<event>","additionalContext":"..."}}`; the object requires
 //     hookEventName set to the event name. additionalContext is accepted for every event above too, so
 //     UserPromptExpansion and PostModelSwitch, which get the JSON form here, still deliver.
+//
+// client "json" (Grok and Devin, set by Run) is the JSON form on every event, the join line included: those CLIs
+// drop plain stdout.
 func format(client, event, body string) string {
-	if body == joinLine {
-		return body + "\n"
-	}
 	text := "irc:\n" + body
-	if client == "claude" && event != "UserPromptSubmit" && event != "SessionStart" {
+	if body == joinLine {
+		if client != "json" {
+			return body + "\n"
+		}
+		text = body
+	}
+	if client == "json" || client == "claude" && event != "UserPromptSubmit" && event != "SessionStart" {
 		var out bytes.Buffer
 		enc := json.NewEncoder(&out)
 		enc.SetEscapeHTML(false)

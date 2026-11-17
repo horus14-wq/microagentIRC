@@ -133,6 +133,7 @@ func runHook(args []string, getenv func(string) string, stdin io.Reader, stdout 
 		PIDs:    identity.Ancestors(os.Getpid(), 8, identity.ParentOf),
 		Stdin:   in,
 		Stdout:  stdout,
+		Host:    hook.HostFrom(getenv),
 	})
 }
 

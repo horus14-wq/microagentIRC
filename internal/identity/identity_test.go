@@ -99,3 +99,20 @@ func TestParentOfLive(t *testing.T) {
 		t.Fatalf("ParentOf(self) = %d, want %d", ppid, os.Getppid())
 	}
 }
+
+// A Devin seat inherits CLAUDE_* variables from a Claude Code parent (docs/compat.md, Devin: "do not trust CLAUDE_* to
+// identify a CLI"). The seat never reads them, so a Devin pane and a Claude Code pane stay distinct seats.
+func TestSeatIgnoresInheritedClaudeVariables(t *testing.T) {
+	noTTY := func() (string, bool) { return "", false }
+	cwd := func() (string, error) { return "/w", nil }
+	for _, base := range []map[string]string{{"TMUX_PANE": "%9"}, {}} {
+		inherited := map[string]string{"CLAUDE_CODE_SESSION_ID": "claude-parent", "CLAUDE_PID": "4242", "DEVIN_PROJECT_DIR": "/w"}
+		for k, v := range base {
+			inherited[k] = v
+		}
+		want := Seat(func(k string) string { return base[k] }, noTTY, cwd)
+		if got := Seat(func(k string) string { return inherited[k] }, noTTY, cwd); got != want {
+			t.Fatalf("seat with inherited CLAUDE_* = %q, want %q", got, want)
+		}
+	}
+}
