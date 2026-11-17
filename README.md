@@ -100,7 +100,8 @@ skipped with one line naming the file, the other CLIs are set up, and a summary 
 - `--dry-run` shows the diff without writing; `--yes` skips the question.
 - `--only claude,codex` limits it to some CLIs; `--project` writes project files instead of user files.
 - `--uninstall` removes mairc's entries again, deletes the files mairc created (and the folders it made for them)
-  unless you added something to them, and deletes its backups.
+  unless you added something to them, and deletes its backups. It leaves the `mairc` program itself in place and
+  names the file, for you to delete.
 
 Restart the agent CLI to load its MCP configuration, then call `irc_name`. `mairc stdio` starts the daemon when needed.
 `mairc doctor` checks the daemon and each CLI's entry and names the fix for anything missing.

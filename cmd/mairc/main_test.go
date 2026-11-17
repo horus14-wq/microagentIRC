@@ -463,3 +463,30 @@ func TestCopyFile(t *testing.T) {
 		t.Fatal("the temporary copy was left behind")
 	}
 }
+
+// mairc-z8t: a full uninstall says that the program file is still there, once, and only when it is.
+func TestUninstallSaysTheProgramStays(t *testing.T) {
+	dir := t.TempDir()
+	stable := filepath.Join(dir, "bin", "mairc")
+	var out bytes.Buffer
+	binaryStays(stable, &out)
+	if out.Len() != 0 {
+		t.Fatalf("nothing is there, yet it printed %q", out.String())
+	}
+	if err := os.MkdirAll(filepath.Dir(stable), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(stable, []byte("program"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	binaryStays(stable, &out)
+	want := "the mairc program itself stays at " + stable + ": delete that file to remove mairc completely\n"
+	if out.String() != want {
+		t.Fatalf("printed %q, want %q", out.String(), want)
+	}
+	out.Reset()
+	binaryStays(filepath.Dir(stable), &out) // a folder is not the program
+	if out.Len() != 0 {
+		t.Fatalf("a folder printed %q", out.String())
+	}
+}

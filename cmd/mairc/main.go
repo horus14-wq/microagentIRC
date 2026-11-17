@@ -374,12 +374,26 @@ func runInstall(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		}
 		return binary, nil
 	}
-	return install.Run(install.Options{
+	code := install.Run(install.Options{
 		Binary: binary, Scope: *scope, Home: home, Project: cwd,
 		Print: *printOnly, Uninstall: *uninstall, Out: stdout,
 		Only: onlyList, DryRun: *dryRun, Confirm: confirm, LookPath: exec.LookPath, GOOS: runtime.GOOS,
 		PrepareBinary: prepare,
 	})
+	if code == 0 && *uninstall && !*dryRun && !*printOnly && len(onlyList) == 0 {
+		binaryStays(stableBinaryPath(home), stdout)
+	}
+	return code
+}
+
+// binaryStays says, after a full uninstall, that mairc's own program file is still there. Uninstall removes what
+// mairc wrote into the CLIs' files; it does not delete the program (it may be the one running, and on Windows a
+// running program cannot be deleted), so without this line a copy install made would stay behind unmentioned.
+func binaryStays(stable string, stdout io.Writer) {
+	if info, err := os.Stat(stable); err != nil || info.IsDir() {
+		return
+	}
+	_, _ = fmt.Fprintf(stdout, "the mairc program itself stays at %s: delete that file to remove mairc completely\n", stable)
 }
 
 // ask lists the files about to change and reads one yes/no answer; anything but y or yes (end of input included)
