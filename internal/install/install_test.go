@@ -12,7 +12,7 @@ const testBinary = "/opt/mairc/bin/mairc"
 
 func golden(t *testing.T, name string) []byte {
 	t.Helper()
-	b, err := os.ReadFile(filepath.Join("..", "..", "testdata", "vectors", "install", name))
+	b, err := os.ReadFile(filepath.Join("..", "..", "testdata", "vectors", "install", name)) // #nosec G304 -- fixed test vector
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -21,7 +21,7 @@ func golden(t *testing.T, name string) []byte {
 
 func read(t *testing.T, path string) []byte {
 	t.Helper()
-	b, err := os.ReadFile(path)
+	b, err := os.ReadFile(path) // #nosec G304 -- a file inside the test's temporary directory
 	if err != nil {
 		t.Fatal(err)
 	}

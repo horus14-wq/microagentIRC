@@ -119,7 +119,7 @@ func TestNilPIDsAreSentAsAnEmptyList(t *testing.T) {
 
 func refusedURL(t *testing.T) string {
 	t.Helper()
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	ln, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -166,7 +166,7 @@ func TestZeroOutputWhenNothingIsDelivered(t *testing.T) {
 // The handler blocks on a channel the test releases afterwards; the test itself never sleeps.
 func TestTimeoutIsHonouredAndSilent(t *testing.T) {
 	release := make(chan struct{})
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		select {
 		case <-release:
 		case <-time.After(2 * time.Second):
@@ -206,11 +206,11 @@ func TestGoldenVectors(t *testing.T) {
 	dir := filepath.Join("..", "..", "testdata", "vectors", "hook")
 	for _, tc := range cases {
 		t.Run(tc.vector, func(t *testing.T) {
-			in, err := os.ReadFile(filepath.Join(dir, tc.vector+".in.txt"))
+			in, err := os.ReadFile(filepath.Join(dir, tc.vector+".in.txt")) // #nosec G304 -- fixed test vector
 			if err != nil {
 				t.Fatal(err)
 			}
-			want, err := os.ReadFile(filepath.Join(dir, tc.vector+".out.txt"))
+			want, err := os.ReadFile(filepath.Join(dir, tc.vector+".out.txt")) // #nosec G304 -- fixed test vector
 			if err != nil {
 				t.Fatal(err)
 			}

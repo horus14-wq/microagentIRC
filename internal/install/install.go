@@ -201,7 +201,7 @@ func (t *target) store() error {
 
 // backup writes the original content once; an existing backup is never overwritten.
 func backup(path string, raw []byte, mode fs.FileMode) error {
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, mode)
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, mode) // #nosec G304 -- <the file being changed>.mairc.bak
 	if errors.Is(err, fs.ErrExist) {
 		return nil
 	}

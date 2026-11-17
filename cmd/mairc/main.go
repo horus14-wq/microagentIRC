@@ -225,7 +225,8 @@ func startDaemon(p config.Paths) error {
 		return err
 	}
 	defer func() { _ = devNull.Close() }()
-	cmd := exec.Command(exe, "daemon") // #nosec G204 -- this binary, re-executed
+	// A detached daemon must outlive this command, so its context is never cancelled.
+	cmd := exec.CommandContext(context.Background(), exe, "daemon") // #nosec G204 -- this binary, re-executed
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = devNull, logFile, logFile
 	detach(cmd)
 	if err := cmd.Start(); err != nil {

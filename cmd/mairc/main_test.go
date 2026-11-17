@@ -42,7 +42,7 @@ func home(t *testing.T, listen string, withToken bool) string {
 // refused returns a loopback address nothing listens on.
 func refused(t *testing.T) string {
 	t.Helper()
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	ln, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -274,16 +274,16 @@ func TestBuildLinksOnlyAllowedModules(t *testing.T) {
 		t.Fatalf("the go command is not on PATH: %v", err)
 	}
 	bin := filepath.Join(t.TempDir(), "mairc")
-	build := exec.Command(goBin, "build", "-o", bin, ".")
+	build := exec.CommandContext(t.Context(), goBin, "build", "-o", bin, ".")
 	build.Env = append(os.Environ(), "CGO_ENABLED=0")
 	if out, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("CGO_ENABLED=0 go build: %v\n%s", err, out)
 	}
-	info, err := exec.Command(goBin, "version", "-m", bin).Output()
+	info, err := exec.CommandContext(t.Context(), goBin, "version", "-m", bin).Output()
 	if err != nil {
 		t.Fatalf("go version -m: %v", err)
 	}
-	graph, err := exec.Command(goBin, "mod", "graph").Output()
+	graph, err := exec.CommandContext(t.Context(), goBin, "mod", "graph").Output()
 	if err != nil {
 		t.Fatalf("go mod graph: %v", err)
 	}
