@@ -231,14 +231,18 @@ func TestANewBinaryPathUpdatesOurEntriesInPlace(t *testing.T) {
 	}
 }
 
-func TestUninstallOfFilesWeCreatedLeavesEmptyObjects(t *testing.T) {
+// mairc-nlr: files install created are removed again by uninstall, with the directory made for them, and nothing
+// else is left in the home (no backup directory either).
+func TestUninstallOfFilesWeCreatedRemovesThem(t *testing.T) {
 	home := t.TempDir()
 	run(Options{Binary: testBinary, Home: home})
-	run(Options{Binary: testBinary, Home: home, Uninstall: true})
-	for _, p := range []string{filepath.Join(home, ".claude.json"), filepath.Join(home, ".claude", "settings.json")} {
-		if got := string(read(t, p)); got != "{}\n" {
-			t.Fatalf("%s = %q, want {}", p, got)
-		}
+	mcp, set := filepath.Join(home, ".claude.json"), filepath.Join(home, ".claude", "settings.json")
+	code, out := run(Options{Binary: testBinary, Home: home, Uninstall: true})
+	if code != 0 || out != "removed "+mcp+"\nremoved "+set+"\n" {
+		t.Fatalf("uninstall = %d, %q", code, out)
+	}
+	if entries, _ := os.ReadDir(home); len(entries) != 0 {
+		t.Fatalf("uninstall left %v", entries)
 	}
 	// Uninstalling again, or with no files at all, changes nothing and creates nothing.
 	empty := t.TempDir()
@@ -250,18 +254,30 @@ func TestUninstallOfFilesWeCreatedLeavesEmptyObjects(t *testing.T) {
 	}
 }
 
+// The backup is in mairc's own directory, written once and never overwritten, and dropped by uninstall.
 func TestBackupIsWrittenOnceAndNeverOverwritten(t *testing.T) {
-	home := t.TempDir()
-	mcp := filepath.Join(home, ".claude.json")
-	write(t, mcp, otherMCP, 0o600)
-	run(Options{Binary: "/first/mairc", Home: home})
-	if got := string(read(t, mcp+".mairc.bak")); got != otherMCP {
-		t.Fatalf("backup = %q, want the original", got)
-	}
-	run(Options{Binary: "/second/mairc", Home: home})
-	run(Options{Binary: testBinary, Home: home, Uninstall: true})
-	if got := string(read(t, mcp+".mairc.bak")); got != otherMCP {
-		t.Fatalf("backup was overwritten: %q", got)
+	for _, goos := range []string{"linux", "darwin", "windows"} {
+		home := t.TempDir()
+		mcp := filepath.Join(home, ".claude.json")
+		write(t, mcp, otherMCP, 0o600)
+		root := map[string]string{
+			"linux":   filepath.Join(home, ".local", "share", "mairc", "install-backup"),
+			"darwin":  filepath.Join(home, "Library", "Application Support", "mairc", "install-backup"),
+			"windows": filepath.Join(home, "AppData", "Local", "mairc", "install-backup"),
+		}[goos]
+		saved := backupFile(root, mcp)
+		run(Options{Binary: "/first/mairc", Home: home, GOOS: goos})
+		if got := string(read(t, saved)); got != otherMCP {
+			t.Fatalf("%s: backup = %q, want the original", goos, got)
+		}
+		run(Options{Binary: "/second/mairc", Home: home, GOOS: goos})
+		if got := string(read(t, saved)); got != otherMCP {
+			t.Fatalf("%s: backup was overwritten: %q", goos, got)
+		}
+		run(Options{Binary: testBinary, Home: home, GOOS: goos, Uninstall: true})
+		if entries, _ := os.ReadDir(home); len(entries) != 1 || entries[0].Name() != ".claude.json" {
+			t.Fatalf("%s: uninstall left %v", goos, entries)
+		}
 	}
 }
 

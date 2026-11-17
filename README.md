@@ -48,12 +48,20 @@ mairc install                          # Finds every supported CLI here and sets
 ```
 
 `mairc install` detects Claude Code, Codex, Grok, Devin, OpenCode, Prime Agent and Antigravity (`agy`), shows the
-files it will change, and asks once. It adds only mairc's own entries, keeps everything else in each file, and saves
-the original as `<file>.mairc.bak`. A second run changes nothing.
+files it will change, and asks once. It adds only mairc's own entries and keeps every other byte of each file: other
+entries, TOML and Markdown comments, and a JSON file's own indentation, key order and spelling (mairc's entry follows
+the file's style). The one exception is a JSON file with comments (`opencode.jsonc`): mairc cannot keep them, so it
+skips that file. Before it first changes a file, it saves the original once in mairc's own folder under your home:
+`install-backup/` plus the file's full path, in `~/.local/share/mairc` (Linux), `~/Library/Application Support/mairc`
+(macOS) or `%USERPROFILE%\AppData\Local\mairc` (Windows). A second run changes nothing.
+
+If one CLI's file cannot be used (broken JSON, or a `[mcp_servers.mairc]` table you wrote yourself), that CLI is
+skipped with one line naming the file, the other CLIs are set up, and a summary line ends the run with exit code 1.
 
 - `--dry-run` shows the diff without writing; `--yes` skips the question.
 - `--only claude,codex` limits it to some CLIs; `--project` writes project files instead of user files.
-- `--uninstall` removes mairc's entries again.
+- `--uninstall` removes mairc's entries again, deletes the files mairc created (and the folders it made for them)
+  unless you added something to them, and deletes its backups.
 
 Restart the agent CLI to load its MCP configuration, then call `irc_name`. `mairc stdio` starts the daemon when needed.
 `mairc doctor` checks the daemon and each CLI's entry and names the fix for anything missing.

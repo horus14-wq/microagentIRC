@@ -103,6 +103,7 @@ func Run(o Options) int {
 	// Each CLI is read, checked and edited in memory before anything is written. A CLI with a file that cannot be
 	// read, parsed or merged is skipped whole, with one line naming the file; the others go ahead.
 	var ready, failed []*cliRun
+	backups := backupRoot(o)
 	for _, c := range selected {
 		specs := c.files(scope, o)
 		if len(specs) == 0 {
@@ -111,7 +112,7 @@ func Run(o Options) int {
 		}
 		run := &cliRun{name: c.name}
 		for _, f := range specs {
-			run.files = append(run.files, &target{path: f.path, spec: f})
+			run.files = append(run.files, &target{path: f.path, spec: f, backups: backups})
 		}
 		if problem := run.prepare(o.Binary, o.Uninstall); problem != "" {
 			_, _ = fmt.Fprintf(out, "%s: skipped, %s\n", c.name, problem)
@@ -126,6 +127,10 @@ func Run(o Options) int {
 	}
 	if o.DryRun {
 		for _, f := range changed {
+			if f.remove {
+				_, _ = fmt.Fprintf(out, "would remove %s\n", f.path)
+				continue
+			}
 			_, _ = fmt.Fprintf(out, "would update %s\n%s", f.path, shortDiff(f.raw, f.out))
 		}
 	} else if len(changed) > 0 && o.Confirm != nil && !o.Confirm(paths(changed)) {
@@ -176,6 +181,10 @@ func (r *cliRun) prepare(binary string, uninstall bool) (problem string) {
 		if problem != "" {
 			return problem
 		}
+		// A file mairc created that uninstall leaves empty is a stub: it is removed, not written back.
+		if uninstall && f.existed && f.empty() && f.created() {
+			f.remove, edited = true, true
+		}
 		if edited {
 			r.changed = append(r.changed, f)
 		}
@@ -184,14 +193,27 @@ func (r *cliRun) prepare(binary string, uninstall bool) (problem string) {
 }
 
 // store writes the CLI's changed files and reports each; it stops at the first file it cannot write.
+// After a whole uninstall, the CLI's backups are dropped: nothing of mairc's is left.
 func (r *cliRun) store(out io.Writer, uninstall bool) (*target, error) {
 	for _, f := range r.changed {
-		if err := f.store(); err != nil {
+		if f.remove {
+			if err := f.removeStub(); err != nil {
+				return f, err
+			}
+			_, _ = fmt.Fprintf(out, "removed %s\n", f.path)
+			continue
+		}
+		if err := f.store(!uninstall); err != nil {
 			return f, err
 		}
 		_, _ = fmt.Fprintf(out, "updated %s\n", f.path)
 		if f.spec.notice != "" && !uninstall {
 			_, _ = fmt.Fprintln(out, f.spec.notice)
+		}
+	}
+	if uninstall {
+		for _, f := range r.files {
+			f.dropBackup()
 		}
 	}
 	return nil, nil
@@ -322,6 +344,8 @@ type target struct {
 	existed bool
 	mode    fs.FileMode
 	dest    string // where the bytes are written: path with symlinks resolved (dotfile managers link configs)
+	backups string // mairc's backup directory ("" for none; see backupRoot)
+	remove  bool   // uninstall: the file is a stub mairc created, and is deleted
 }
 
 // load reads the file. A missing file is empty (an empty object for JSON); a JSON file that is not a JSON object is
@@ -384,22 +408,29 @@ func (t *target) apply(binary string, uninstall bool) (edited bool, problem stri
 	return false, fmt.Sprintf("cannot parse %s: unknown format %s", t.path, t.spec.format)
 }
 
-// store keeps a one-time backup of the original content, then writes atomically: a temporary file in the same
-// directory, the original mode (0600 for a new file), and a rename over the target. A symlinked file is written at
-// its resolved destination (dest), so the link stays a link.
-func (t *target) store() error {
-	dest := t.dest
-	if dest == "" {
-		dest = t.path
-	}
+// store writes atomically: a temporary file in the same directory, the original mode (0600 for a new file), and a
+// rename over the target. A symlinked file is written at its resolved destination (dest), so the link stays a link.
+// With keep (install), the first change of an existing file first copies the original into mairc's backup directory,
+// and a file mairc creates is noted there, with the directories it made for it, so uninstall can remove it again.
+func (t *target) store(keep bool) error {
+	dest := t.destination()
 	dir := filepath.Dir(dest)
+	var made string
 	if !t.existed {
+		made = topMissing(dir)
 		if err := os.MkdirAll(dir, 0o700); err != nil {
 			return err
 		}
 	}
-	if t.existed {
-		if err := backup(dest+".mairc.bak", t.raw, t.mode); err != nil {
+	if keep && t.backups != "" {
+		var err error
+		switch {
+		case !t.existed:
+			err = t.writeBackup(t.path+createdSuffix, []byte(made), 0o600)
+		case !t.created():
+			err = t.writeBackup(t.path, t.raw, t.mode)
+		}
+		if err != nil {
 			return err
 		}
 	}
@@ -428,9 +459,140 @@ func (t *target) store() error {
 	return nil
 }
 
+func (t *target) destination() string {
+	if t.dest == "" {
+		return t.path
+	}
+	return t.dest
+}
+
+// createdSuffix marks, in the backup directory, a file mairc created; its content is the first directory mairc made
+// for it ("" when the directory was there).
+const createdSuffix = ".created"
+
+// created reports whether mairc created this file (and the user has not had it backed up as their own since).
+func (t *target) created() bool {
+	if t.backups == "" {
+		return false
+	}
+	_, err := os.Stat(backupFile(t.backups, t.path) + createdSuffix)
+	return err == nil
+}
+
+// empty reports whether the file as it will be written holds nothing: an empty JSON object, or only whitespace.
+func (t *target) empty() bool {
+	if t.spec.format == "json" {
+		return t.root != nil && t.root.kind == objectNode && len(t.root.keys) == 0
+	}
+	return strings.TrimSpace(string(t.out)) == ""
+}
+
+// removeStub deletes a file mairc created, and the directories mairc made for it once they are empty.
+func (t *target) removeStub() error {
+	made, _ := os.ReadFile(backupFile(t.backups, t.path) + createdSuffix) // #nosec G304 -- inside mairc's backup directory
+	if err := os.Remove(t.destination()); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	if len(made) > 0 {
+		pruneDirs(filepath.Dir(t.path), string(made))
+	}
+	return nil
+}
+
+// writeBackup writes content once at the backup of name; an existing backup is never overwritten.
+func (t *target) writeBackup(name string, content []byte, mode fs.FileMode) error {
+	path := backupFile(t.backups, name)
+	dir := filepath.Dir(path)
+	if made := topMissing(t.backups); made != "" {
+		if err := os.MkdirAll(t.backups, 0o700); err != nil {
+			return err
+		}
+		// The directories made for the backup directory itself, so the last uninstall removes them too.
+		if err := backup(filepath.Join(t.backups, madeFile), []byte(made), 0o600); err != nil {
+			return err
+		}
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	return backup(path, content, mode)
+}
+
+// madeFile, in the backup directory, names the first directory install made to hold it.
+const madeFile = "made"
+
+// dropBackup removes the file's backup and created mark, then every directory of the backup tree that is now empty,
+// the backup directory itself (and those made for it) included.
+func (t *target) dropBackup() {
+	if t.backups == "" {
+		return
+	}
+	path := backupFile(t.backups, t.path)
+	_ = os.Remove(path)
+	_ = os.Remove(path + createdSuffix)
+	pruneDirs(filepath.Dir(path), t.backups)
+	entries, err := os.ReadDir(t.backups)
+	if err != nil || len(entries) != 1 || entries[0].Name() != madeFile {
+		return
+	}
+	made, err := os.ReadFile(filepath.Join(t.backups, madeFile)) // #nosec G304 -- inside mairc's backup directory
+	if err != nil || os.Remove(filepath.Join(t.backups, madeFile)) != nil {
+		return
+	}
+	pruneDirs(t.backups, string(made))
+}
+
+// pruneDirs removes dir and its parents while they are empty, up to and including stop, which must contain dir.
+func pruneDirs(dir, stop string) {
+	if rel, err := filepath.Rel(stop, dir); err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return
+	}
+	for {
+		if os.Remove(dir) != nil || dir == stop {
+			return
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return
+		}
+		dir = parent
+	}
+}
+
+// topMissing returns the outermost directory of dir's path that does not exist yet ("" when dir exists).
+func topMissing(dir string) string {
+	top := ""
+	for {
+		if _, err := os.Stat(dir); err == nil {
+			return top
+		}
+		top = dir
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return top
+		}
+		dir = parent
+	}
+}
+
+// backupRoot is mairc's own directory for install backups, under the user's home: mairc's default data directory
+// on each OS (internal/config) plus install-backup. "" without a home: then nothing is backed up.
+func backupRoot(o Options) string {
+	if o.Home == "" {
+		return ""
+	}
+	switch o.GOOS {
+	case "darwin":
+		return filepath.Join(o.Home, "Library", "Application Support", "mairc", "install-backup")
+	case "windows":
+		return filepath.Join(o.Home, "AppData", "Local", "mairc", "install-backup")
+	}
+	return filepath.Join(o.Home, ".local", "share", "mairc", "install-backup")
+}
+
 // backup writes the original content once; an existing backup is never overwritten.
 func backup(path string, raw []byte, mode fs.FileMode) error {
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, mode) // #nosec G304 -- <the file being changed>.mairc.bak
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, mode) // #nosec G304 -- inside mairc's backup directory
 	if errors.Is(err, fs.ErrExist) {
 		return nil
 	}
@@ -505,4 +667,17 @@ func printSnippets(out io.Writer, binary string) {
 	_, _ = fmt.Fprintln(out, "Other agent CLIs:")
 	_, _ = fmt.Fprintf(out, "MCP (stdio): %s stdio\n", binary)
 	_, _ = fmt.Fprintf(out, "Hook (any event, zero output when nothing is new): %s hook --client plain\n", binary)
+}
+
+// backupFile is where the backup of path (a configured path, as the CLI table names it) is kept under root: the path's own directories below root, with a Windows
+// volume (C: or \\server\share) as one plain directory name.
+func backupFile(root, path string) string {
+	volume := filepath.VolumeName(path)
+	name := strings.Map(func(r rune) rune {
+		if r == ':' || r == '\\' || r == '/' {
+			return '_'
+		}
+		return r
+	}, strings.TrimLeft(volume, `\/`))
+	return filepath.Join(root, name, path[len(volume):])
 }

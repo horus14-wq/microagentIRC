@@ -422,8 +422,8 @@ func TestCodexGetsTheHookTheApprovalLineAndTheNote(t *testing.T) {
 	if code, out := runRaw(o); code != 0 || strings.Contains(out, "approve") {
 		t.Fatalf("uninstall = %d, %q", code, out)
 	}
-	if got := string(read(t, hooks)); strings.Contains(got, "mairc") {
-		t.Fatalf("hooks.json after uninstall:\n%s", got)
+	if _, err := os.Stat(hooks); err == nil {
+		t.Fatal("hooks.json, which mairc created, is still there after uninstall")
 	}
 	project := t.TempDir()
 	runRaw(Options{Binary: testBinary, Scope: "project", Home: t.TempDir(), Project: project, Only: []string{"codex"}})
@@ -436,7 +436,7 @@ func TestCodexGetsTheHookTheApprovalLineAndTheNote(t *testing.T) {
 }
 
 // A config that is a symlink (dotfile managers; Devin's global AGENTS.md links to Codex's on some machines) is changed
-// where it lives: the link stays a link, the target gains mairc's entry, the backup sits next to the target.
+// where it lives: the link stays a link, the target gains mairc's entry, the backup is the target's.
 func TestSymlinkedConfigStaysALink(t *testing.T) {
 	home, store := t.TempDir(), t.TempDir()
 	target := filepath.Join(store, "claude.json")
@@ -454,7 +454,7 @@ func TestSymlinkedConfigStaysALink(t *testing.T) {
 	if got := string(read(t, target)); !strings.Contains(got, testBinary) || !strings.HasPrefix(got, "{\n  \"keep\": 1,\n") {
 		t.Fatalf("target:\n%s", got)
 	}
-	if got := string(read(t, target+".mairc.bak")); got != "{\n  \"keep\": 1\n}\n" {
-		t.Fatalf("backup next to the target = %q", got)
+	if got := string(read(t, backupFile(backupRoot(Options{Home: home}), link))); got != "{\n  \"keep\": 1\n}\n" {
+		t.Fatalf("backup of the target = %q", got)
 	}
 }
