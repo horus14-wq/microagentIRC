@@ -5,6 +5,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -22,6 +23,7 @@ import (
 
 	"github.com/horus14-wq/microagentIRC/internal/config"
 	"github.com/horus14-wq/microagentIRC/internal/daemon"
+	"github.com/horus14-wq/microagentIRC/internal/doctor"
 	"github.com/horus14-wq/microagentIRC/internal/hook"
 	"github.com/horus14-wq/microagentIRC/internal/identity"
 	"github.com/horus14-wq/microagentIRC/internal/install"
@@ -31,7 +33,7 @@ import (
 // version is the release; overridable with -ldflags "-X main.version=...".
 var version = "0.1.0"
 
-const usageLine = "usage: mairc daemon|stdio|hook|config|install|status|version"
+const usageLine = "usage: mairc daemon|stdio|hook|config|install|status|doctor|version"
 
 // controlTimeout bounds `mairc status` and the reload `mairc config set` asks for.
 const controlTimeout = time.Second
@@ -75,6 +77,8 @@ func run(args []string, getenv func(string) string, stdin io.Reader, stdout, std
 			return 2
 		}
 		return runStatus(getenv, stdout)
+	case "doctor":
+		return runDoctor(args[1:], getenv, stdin, stdout, stderr)
 	default:
 		_, _ = fmt.Fprintln(stderr, usageLine)
 		return 2
@@ -405,4 +409,186 @@ func fetchStatus(getenv func(string) string) (daemonStatus, bool) {
 		return st, false
 	}
 	return st, true
+}
+
+// doctorTimeout bounds one live CLI run: a CLI that has to think for longer is a CLI the user is watching anyway.
+const doctorTimeout = 3 * time.Minute
+
+// runDoctor checks what `mairc install` set up: the daemon, each configured CLI's MCP entry and hook, and with --live
+// whether a tool call actually reaches the daemon. Exit 0 only when everything checked is healthy.
+func runDoctor(args []string, getenv func(string) string, stdin io.Reader, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("doctor", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	live := fs.Bool("live", false, "")
+	assumeYes := fs.Bool("yes", false, "")
+	scope := fs.String("scope", "user", "")
+	if err := fs.Parse(args); err != nil || fs.NArg() > 0 {
+		_, _ = fmt.Fprintln(stderr, "usage: mairc doctor [--live] [--yes] [--scope user|project]")
+		return 2
+	}
+	if *scope != "user" && *scope != "project" {
+		_, _ = fmt.Fprintln(stderr, "usage: --scope must be user or project")
+		return 2
+	}
+	p, err := config.ResolvePaths(getenv)
+	if err != nil {
+		_, _ = fmt.Fprintln(stderr, err)
+		return 1
+	}
+	settings, err := config.Load(p.Config)
+	if err != nil {
+		_, _ = fmt.Fprintf(stdout, "config: %v — fix %s\n", err, p.Config)
+		return 1
+	}
+	settings.Listen = listenOr(settings.Listen, getenv)
+	token, _ := config.ReadToken(p.Token)
+	home, _ := os.UserHomeDir()
+	cwd, _ := os.Getwd()
+	self, _ := os.Executable()
+	statuses := install.Statuses(install.Options{
+		Binary: self, Scope: *scope, Home: home, Project: cwd, GOOS: runtime.GOOS, LookPath: exec.LookPath,
+	})
+	base := "http://" + settings.Listen
+	probes := doctor.Probes{
+		Health: func() error { return daemonHealth(base) },
+		Status: func() (int, int, error) { return daemonCounts(base, token) },
+		Hook:   runHookCommand,
+	}
+	var confirm func(string) bool
+	if *live {
+		probes.Live = func(cli string) (bool, error) { return liveRun(base, token, cli) }
+		confirm = askSpend(stdin, stdout, *assumeYes)
+	}
+	return doctor.Run(doctor.Options{Out: stdout, Daemon: base, CLIs: statuses, Probes: probes, Live: *live, Spend: confirm})
+}
+
+// listenOr falls back to the default listen address when the settings file does not name one.
+func listenOr(listen string, getenv func(string) string) string {
+	if listen != "" {
+		return listen
+	}
+	if addr := getenv("MAIRC_LISTEN"); addr != "" {
+		return addr
+	}
+	return "127.0.0.1:4747"
+}
+
+// daemonHealth asks /healthz: the daemon writes "ok" there once it is serving.
+func daemonHealth(base string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), controlTimeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/healthz", nil)
+	if err != nil {
+		return err
+	}
+	resp, err := controlClient().Do(req)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 16))
+	if err != nil {
+		return err
+	}
+	if resp.StatusCode != http.StatusOK || string(body) != "ok" {
+		return fmt.Errorf("%s answered %d", base+"/healthz", resp.StatusCode)
+	}
+	return nil
+}
+
+// daemonCounts asks /v1/status with the token: a 401 or 403 means the token the doctor read is not the daemon's.
+func daemonCounts(base, token string) (int, int, error) {
+	var st daemonStatus
+	ctx, cancel := context.WithTimeout(context.Background(), controlTimeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/v1/status", nil)
+	if err != nil {
+		return 0, 0, err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err := controlClient().Do(req)
+	if err != nil {
+		return 0, 0, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		return 0, 0, fmt.Errorf("status %d", resp.StatusCode)
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&st); err != nil {
+		return 0, 0, err
+	}
+	return st.Sessions, st.Agents, nil
+}
+
+// runHookCommand runs a recorded hook command the way its CLI would: no arguments, empty stdin, output captured. The
+// doctor is looking for two things — that it starts at all, and that it prints nothing when nothing is new.
+func runHookCommand(command string) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), hookCommandTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "sh", "-c", command) // #nosec G204 -- the command is what the user's CLI config already runs
+	cmd.Stdin = strings.NewReader("")
+	var out bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &out, io.Discard
+	if err := cmd.Run(); err != nil {
+		return out.String(), err
+	}
+	return out.String(), nil
+}
+
+// hookCommandTimeout bounds one hook run; the hook's own budget is a few seconds.
+const hookCommandTimeout = 15 * time.Second
+
+// liveRun runs a CLI once, headless, and reports whether the daemon saw the MCP session that run opened.
+func liveRun(base, token, cli string) (bool, error) {
+	args, ok := doctor.LiveCommand(cli)
+	if !ok {
+		return false, fmt.Errorf("mairc doctor has no headless command recorded for %s", cli)
+	}
+	before, _, err := daemonCounts(base, token)
+	if err != nil {
+		return false, err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), doctorTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, args[0], append(args[1:], doctor.Prompt())...)
+	cmd.Stdin = nil
+	var out bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &out, &out
+	if err := cmd.Run(); err != nil {
+		return false, fmt.Errorf("%s: %w", firstLineOf(out.String()), err)
+	}
+	after, _, err := daemonCounts(base, token)
+	if err != nil {
+		return false, err
+	}
+	return after > before, nil
+}
+
+// firstLineOf is the CLI's first output line, for an error that has to say what happened.
+func firstLineOf(s string) string {
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		return s[:i]
+	}
+	return s
+}
+
+// askSpend returns the confirmation asked before each live run: the run spends the user's tokens, so it is said out
+// loud first, and --yes answers for every CLI.
+func askSpend(stdin io.Reader, out io.Writer, yes bool) func(string) bool {
+	r := bufio.NewReader(stdin)
+	return func(cli string) bool {
+		if yes {
+			return true
+		}
+		_, _ = fmt.Fprintf(out, "run %s once to check delivery? It calls the mairc tool once and spends your tokens [y/N] ", cli)
+		line, err := r.ReadString('\n')
+		if err != nil && line == "" {
+			return false
+		}
+		switch strings.ToLower(strings.TrimSpace(line)) {
+		case "y", "yes":
+			return true
+		}
+		return false
+	}
 }
