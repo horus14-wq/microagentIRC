@@ -145,7 +145,7 @@ room reddog7: build is green
 
 ## 7. The hook
 
-`mairc hook [--client claude|plain] [--event <name>] [--name <name>]`
+`mairc hook [--client claude|plain] [--event <name>] [--name <name>] [--session <id>]`
 
 1. Reads the hook JSON the agent CLI passes on stdin, if any (it uses `hook_event_name`; everything else is
    ignored). `--event` overrides it.

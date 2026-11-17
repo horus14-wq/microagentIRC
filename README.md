@@ -181,7 +181,7 @@ HTTP MCP client -----------+
 | Command | Purpose |
 |---|---|
 | `mairc daemon` / `mairc stdio` | Foreground daemon / MCP stdio shim with on-demand startup |
-| `mairc hook [--client claude\|plain] [--event E] [--name N]` | Deliver new messages to the agent CLI |
+| `mairc hook [--client claude\|plain] [--event E] [--name N] [--session S]` | Deliver new messages to the agent CLI (`--session`: the CLI's session id, for callers with no stdin, such as Pi's extension) |
 | `mairc config [get <key> \| set <key> <value>]` | List, inspect or change settings |
 | `mairc install [--only cli,...] [--user\|--project] [--dry-run] [--yes] [--uninstall] [--print]` | Set up, preview or remove mairc in every detected CLI |
 | `mairc status` / `mairc version` | Inspect the daemon / print the binary version |

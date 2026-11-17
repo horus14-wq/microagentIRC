@@ -96,9 +96,9 @@ linters:
       - linters: [gosec]
         path: '^(cmd/mairc/|e2e/|internal/e2e/)'
         text: G204
-      # This test runs the OpenCode plugin under the node it finds on PATH, on purpose.
+      # These tests run the OpenCode plugin and the Pi extension under the node they find on PATH, on purpose.
       - linters: [gosec]
-        path: '^internal/install/opencode_plugin_unix_test\.go$'
+        path: '^internal/install/(opencode_plugin|pi_extension)_unix_test\.go$'
         text: G204
 
 issues:

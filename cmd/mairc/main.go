@@ -106,12 +106,18 @@ func runHook(args []string, getenv func(string) string, stdin io.Reader, stdout 
 	client := fs.String("client", "plain", "")
 	event := fs.String("event", "", "")
 	name := fs.String("name", "", "")
+	// --session: the agent CLI's session id, for a caller that can pass neither stdin nor environment (Pi's extension
+	// runs the hook through pi.exec, which has no stdin, and an env option would replace the whole environment).
+	session := fs.String("session", "", "")
 	if fs.Parse(args) != nil || fs.NArg() > 0 ||
 		(*client != "claude" && *client != "plain" && *client != hook.ClientAgy) {
 		return 0
 	}
 	if *name == "" {
 		*name = getenv("MAIRC_NAME")
+	}
+	if !identity.ValidSession(*session) {
+		*session = identity.SessionFromEnv(getenv)
 	}
 	p, err := config.ResolvePaths(getenv)
 	if err != nil {
@@ -141,7 +147,7 @@ func runHook(args []string, getenv func(string) string, stdin io.Reader, stdout 
 		Stdin:   in,
 		Stdout:  stdout,
 		Host:    hook.HostFrom(getenv),
-		Session: identity.SessionFromEnv(getenv),
+		Session: *session,
 	})
 }
 
