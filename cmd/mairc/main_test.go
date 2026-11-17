@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -368,7 +369,9 @@ func sqliteClosure(graph string) map[string]bool {
 }
 
 func TestUnstableDir(t *testing.T) {
-	home := filepath.Join(os.TempDir()+"-home", "tester") // a home outside TMPDIR (TMPDIR may point anywhere)
+	// A home outside TMPDIR (TMPDIR may point anywhere). Clean first: macOS's TMPDIR ends in "/", and ".../T/" + "-home"
+	// would be inside it.
+	home := filepath.Join(filepath.Clean(os.TempDir())+"-home", "tester")
 	for _, tc := range []struct {
 		path string
 		want bool
@@ -407,7 +410,13 @@ func TestCopyFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Mode().Perm() != 0o755 {
-		t.Fatalf("mode %v", info.Mode().Perm())
+	// 0755 where Unix bits exist. Windows has no execute bit (the .exe name makes a file runnable) and Go reports a
+	// writable file as 0666.
+	want := os.FileMode(0o755)
+	if runtime.GOOS == "windows" {
+		want = 0o666
+	}
+	if info.Mode().Perm() != want {
+		t.Fatalf("mode %v, want %v", info.Mode().Perm(), want)
 	}
 }

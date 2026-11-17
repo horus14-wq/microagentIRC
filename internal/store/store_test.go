@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"sync"
 	"testing"
@@ -350,8 +351,13 @@ func TestPrune(t *testing.T) {
 func TestFileBackedStoreKeepsItsData(t *testing.T) {
 	ctx := context.Background()
 	t0 := start()
-	// A path with characters that mean something in a URI.
-	path := filepath.Join(t.TempDir(), "odd name #1 100%?.db")
+	// A path with characters that mean something in a URI. Windows forbids "?" in file names (TestFileURI still covers
+	// its escaping there).
+	name := "odd name #1 100%?.db"
+	if runtime.GOOS == "windows" {
+		name = "odd name #1 100%.db"
+	}
+	path := filepath.Join(t.TempDir(), name)
 	s, err := Open(ctx, path)
 	must(t, err)
 	must(t, s.UpsertAgent(ctx, "fox", "cwd:/work", t0))
