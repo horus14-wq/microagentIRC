@@ -366,3 +366,48 @@ func sqliteClosure(graph string) map[string]bool {
 	}
 	return allowed
 }
+
+func TestUnstableDir(t *testing.T) {
+	home := filepath.Join(os.TempDir()+"-home", "tester") // a home outside TMPDIR (TMPDIR may point anywhere)
+	for _, tc := range []struct {
+		path string
+		want bool
+	}{
+		{filepath.Join(os.TempDir(), "mairc"), true},
+		{filepath.Join(os.TempDir(), "x", "mairc"), true},
+		{filepath.Join(home, "Downloads", "mairc"), true},
+		{filepath.Join(home, "Downloads", "dl", "mairc"), true},
+		{filepath.Join(home, "go", "bin", "mairc"), false},
+		{filepath.Join(home, ".local", "bin", "mairc"), false},
+		{filepath.Join(home, "Downloads-mirror", "mairc"), false},
+	} {
+		if got := unstableDir(tc.path, home); got != tc.want {
+			t.Errorf("unstableDir(%q) = %v, want %v", tc.path, got, tc.want)
+		}
+	}
+}
+
+func TestCopyFile(t *testing.T) {
+	src := filepath.Join(t.TempDir(), "mairc")
+	if err := os.WriteFile(src, []byte("binary-bytes"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	dst := filepath.Join(t.TempDir(), "new", "dir", "mairc")
+	if err := copyFile(src, dst, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(dst) // #nosec G304 -- test file in t.TempDir
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(b) != "binary-bytes" {
+		t.Fatalf("copied %q", b)
+	}
+	info, err := os.Stat(dst)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o755 {
+		t.Fatalf("mode %v", info.Mode().Perm())
+	}
+}

@@ -5,6 +5,7 @@ package main
 import (
 	"os"
 	"os/exec"
+	"path/filepath"
 	"syscall"
 )
 
@@ -15,4 +16,10 @@ func shutdownSignals() []os.Signal { return []os.Signal{os.Interrupt, syscall.SI
 // detach puts the started daemon in its own session, so it survives the shell that started it and owns no terminal.
 func detach(cmd *exec.Cmd) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+}
+
+// stableBinaryPath is where `mairc install` copies a binary that sits in a temporary or Downloads
+// directory: the user's bin directory, on PATH for the usual shells.
+func stableBinaryPath(home string) string {
+	return filepath.Join(home, ".local", "bin", "mairc")
 }

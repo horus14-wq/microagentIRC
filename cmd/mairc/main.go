@@ -336,10 +336,34 @@ func runInstall(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	}
 	home, _ := os.UserHomeDir()
 	cwd, _ := os.Getwd()
+	// Every CLI config records the binary's absolute path, so a binary in a temporary or Downloads
+	// directory disappears with the next cleanup and breaks every entry. install asks PrepareBinary
+	// once its selection validates: offer a copy to a stable location first; --yes accepts without
+	// asking, --dry-run warns but writes nothing.
+	prepare := func(binary string) (string, error) {
+		if !unstableDir(binary, home) {
+			return binary, nil
+		}
+		stable := stableBinaryPath(home)
+		switch {
+		case *dryRun:
+			_, _ = fmt.Fprintf(stdout, "%s sits in a temporary or Downloads directory; it would be copied to %s first\n", binary, stable)
+		case *yes || askYesNo(stdin, stdout, fmt.Sprintf("%s sits in a temporary or Downloads directory; the recorded path disappears with the next cleanup.\nCopy mairc to %s first? [y/N] ", binary, stable)):
+			if err := copyFile(binary, stable, 0o755); err != nil {
+				return "", err
+			}
+			_, _ = fmt.Fprintf(stdout, "copied %s to %s\n", binary, stable)
+			return stable, nil
+		default:
+			_, _ = fmt.Fprintf(stdout, "warning: every CLI config will record %s — install again from a stable path\n", binary)
+		}
+		return binary, nil
+	}
 	return install.Run(install.Options{
 		Binary: binary, Scope: *scope, Home: home, Project: cwd,
 		Print: *printOnly, Uninstall: *uninstall, Out: stdout,
 		Only: onlyList, DryRun: *dryRun, Confirm: confirm, LookPath: exec.LookPath, GOOS: runtime.GOOS,
+		PrepareBinary: prepare,
 	})
 }
 
@@ -350,13 +374,46 @@ func ask(stdin io.Reader, stdout io.Writer, files []string) bool {
 	for _, f := range files {
 		_, _ = fmt.Fprintf(stdout, "  %s\n", f)
 	}
-	_, _ = fmt.Fprint(stdout, "Proceed? [y/N] ")
+	return askYesNo(stdin, stdout, "Proceed? [y/N] ")
+}
+
+// askYesNo prints prompt and reads one yes/no answer; anything but y or yes (end of input included) is no.
+func askYesNo(stdin io.Reader, stdout io.Writer, prompt string) bool {
+	_, _ = fmt.Fprint(stdout, prompt)
 	if stdin == nil {
 		return false
 	}
 	line, _ := bufio.NewReader(stdin).ReadString('\n')
 	answer := strings.ToLower(strings.TrimSpace(line))
 	return answer == "y" || answer == "yes"
+}
+
+// unstableDir reports whether path sits in a directory a cleanup may empty: the system temporary
+// directory or the user's Downloads folder.
+func unstableDir(path, home string) bool {
+	dir := filepath.Dir(path)
+	for _, unstable := range []string{os.TempDir(), filepath.Join(home, "Downloads")} {
+		if unstable == "" {
+			continue
+		}
+		if abs, err := filepath.Abs(unstable); err == nil &&
+			(dir == abs || strings.HasPrefix(dir, abs+string(os.PathSeparator))) {
+			return true
+		}
+	}
+	return false
+}
+
+// copyFile copies src to dst, creating dst's directory and giving dst mode.
+func copyFile(src, dst string, mode os.FileMode) error {
+	if err := os.MkdirAll(filepath.Dir(dst), 0o750); err != nil {
+		return err
+	}
+	b, err := os.ReadFile(src) // #nosec G304 -- the running binary's own path
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(dst, b, mode) // #nosec G703 -- dst is stableBinaryPath under the user's home, not input
 }
 
 // daemonStatus is the body of GET /v1/status.

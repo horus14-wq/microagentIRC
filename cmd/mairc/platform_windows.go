@@ -5,6 +5,7 @@ package main
 import (
 	"os"
 	"os/exec"
+	"path/filepath"
 	"syscall"
 )
 
@@ -26,4 +27,10 @@ func detach(cmd *exec.Cmd) {
 		CreationFlags: detachedProcess | createNewProcessGroup,
 		HideWindow:    true,
 	}
+}
+
+// stableBinaryPath is where `mairc install` copies a binary that sits in a temporary or Downloads
+// directory: a bin directory under the user's profile.
+func stableBinaryPath(home string) string {
+	return filepath.Join(home, "bin", "mairc.exe")
 }

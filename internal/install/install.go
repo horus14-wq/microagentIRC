@@ -41,6 +41,10 @@ type Options struct {
 	LookPath func(file string) (string, error)
 	// GOOS selects per-OS configuration paths (runtime.GOOS in production; "" means linux rules).
 	GOOS string
+	// PrepareBinary, when non-nil, runs once after the selection validates and before any file is
+	// written, and returns the binary path to record. The caller uses it to move a temporary or
+	// Downloads binary somewhere stable first; nil records Binary as given.
+	PrepareBinary func(binary string) (string, error)
 }
 
 // hookEvents returns the Claude Code events mairc's hook runs on, in the order they are written.
@@ -87,6 +91,14 @@ func Run(o Options) int {
 	}
 	for _, name := range skipped {
 		_, _ = fmt.Fprintf(out, "%s: not found, skipped\n", name)
+	}
+	if o.PrepareBinary != nil && !o.Uninstall {
+		b, err := o.PrepareBinary(o.Binary)
+		if err != nil {
+			_, _ = fmt.Fprintln(out, err)
+			return 1
+		}
+		o.Binary = b
 	}
 	var files []*target
 	for _, c := range selected {
