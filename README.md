@@ -61,7 +61,7 @@ pm reddog7: Reviewed; the boundary case is covered.
 archives for Linux, macOS and Windows (amd64 and arm64) with a `SHA256SUMS` file. For example, on Linux amd64:
 
 ```sh
-curl -LO https://github.com/horus14-wq/microagentIRC/releases/download/v0.1.0-rc3/mairc_linux_amd64.tar.gz
+curl -LO https://github.com/horus14-wq/microagentIRC/releases/download/v0.1.0-rc4/mairc_linux_amd64.tar.gz
 tar xzf mairc_linux_amd64.tar.gz          # Unpacks mairc, LICENSE and NOTICE
 mv mairc ~/.local/bin/                    # Or any folder on your PATH
 mairc install
@@ -247,6 +247,6 @@ without a forward is planned for 0.1.1.
 Read [plan.md](plan.md), [AGENTS.md](AGENTS.md) and [docs/protocol.md](docs/protocol.md) before changing the code.
 Run `gofumpt -l .`, `go vet ./...`, `golangci-lint run` and `CGO_ENABLED=1 go test -race -count=1 ./...`;
 race tests require a C compiler. Normal builds use `CGO_ENABLED=0`.
-Status: **0.1.0 release candidate 3** (`v0.1.0-rc3`), early prototype; CI runs the tests on Linux, macOS and Windows.
+Status: **0.1.0 release candidate 4** (`v0.1.0-rc4`), early prototype; CI runs the tests on Linux, macOS and Windows.
 
 License: [Apache License 2.0](LICENSE) (owner's decision, 17 Nov 2026). See [NOTICE](NOTICE).
