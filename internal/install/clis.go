@@ -38,6 +38,9 @@ type entrySpec struct {
 	keyPath []string
 	name    string
 	value   func(binary string) *node
+	// legacy is where an older mairc wrote the same entry; install and uninstall both remove it there when it is
+	// mairc's own (its command runs a mairc binary), so an existing install moves to keyPath. nil: none.
+	legacy []string
 }
 
 // A hookSpec is mairc's handler on each of events, in Claude-style hooks: {"<Event>": [{"hooks": [handler]}]}.
@@ -278,8 +281,11 @@ func openCode() cliSpec {
 				plugins = filepath.Join(o.Project, ".opencode", "plugins")
 			}
 			files := []fileSpec{
+				// OpenCode v2 declares MCP servers under mcp.servers.<name> (opencode.ai/docs/mcp-servers); the v1 shape
+				// mcp.<name> that older mairc wrote is removed when it is mairc's (mairc-cpm).
 				{path: config, format: "json", server: &entrySpec{
-					keyPath: []string{"mcp"}, name: "mairc", value: func(binary string) *node {
+					keyPath: []string{"mcp", "servers"}, name: "mairc", legacy: []string{"mcp"},
+					value: func(binary string) *node {
 						return object("type", str("local"), "command", array(str(binary), str("stdio")))
 					},
 				}},

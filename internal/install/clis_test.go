@@ -395,8 +395,9 @@ func TestOpenCodeRow(t *testing.T) {
 	if code, out := runRaw(Options{Binary: testBinary, Home: home, Only: []string{"opencode"}}); code != 0 {
 		t.Fatalf("install = %d, %q", code, out)
 	}
-	want := "{\n  \"mcp\": {\n    \"mairc\": {\n      \"type\": \"local\",\n      \"command\": [\n        \"" + jbin() +
-		"\",\n        \"stdio\"\n      ]\n    }\n  }\n}\n"
+	// mairc-cpm: OpenCode v2's shape, mcp.servers.<name>.
+	want := "{\n  \"mcp\": {\n    \"servers\": {\n      \"mairc\": {\n        \"type\": \"local\",\n        \"command\": [\n" +
+		"          \"" + jbin() + "\",\n          \"stdio\"\n        ]\n      }\n    }\n  }\n}\n"
 	if got := string(read(t, filepath.Join(home, ".config", "opencode", "opencode.json"))); got != want {
 		t.Fatalf("opencode.json:\n%s", got)
 	}
@@ -632,5 +633,54 @@ func TestPiInstallNamesTheTrustStep(t *testing.T) {
 	code, out := runRaw(Options{Binary: testBinary, Home: home, Only: []string{"pi"}})
 	if code != 0 || !strings.Contains(out, "pi: approve the mairc MCP server once: start pi and run /mcp trust mairc\n") {
 		t.Fatalf("install --only pi = %d:\n%s", code, out)
+	}
+}
+
+// mairc-cpm: an install made before OpenCode v2 left mairc's entry at mcp.mairc. Install moves it to mcp.servers.mairc
+// and keeps the user's own servers; a legacy "mairc" entry that runs something else is the user's and stays; a second
+// run changes nothing; uninstall removes mairc's entry and leaves the user's.
+func TestOpenCodeInstallMovesTheLegacyEntry(t *testing.T) {
+	for _, tc := range []struct {
+		name, legacyCommand string
+		keepsLegacy         bool
+	}{
+		{"mairc's own legacy entry moves", "/old/place/mairc", false},
+		{"a user's entry named mairc stays", "/usr/local/bin/other-server", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			path := filepath.Join(home, ".config", "opencode", "opencode.json")
+			write(t, path, `{"theme":"dark","mcp":{"mairc":{"type":"local","command":["`+tc.legacyCommand+`","stdio"]},`+
+				`"notes":{"type":"local","command":["notes-mcp"]}}}`, 0o600)
+			o := Options{Binary: testBinary, Home: home, Only: []string{"opencode"}}
+			if code, out := runRaw(o); code != 0 {
+				t.Fatalf("install = %d:\n%s", code, out)
+			}
+			var got map[string]any
+			if err := json.Unmarshal(read(t, path), &got); err != nil {
+				t.Fatal(err)
+			}
+			mcp, _ := got["mcp"].(map[string]any)
+			servers, _ := mcp["servers"].(map[string]any)
+			if servers["mairc"] == nil || mcp["notes"] == nil || got["theme"] != "dark" {
+				t.Fatalf("after install: %v", got)
+			}
+			if _, legacy := mcp["mairc"]; legacy != tc.keepsLegacy {
+				t.Fatalf("legacy mcp.mairc present = %v, want %v: %v", legacy, tc.keepsLegacy, got)
+			}
+			first := string(read(t, path))
+			if code, _ := runRaw(o); code != 0 || string(read(t, path)) != first {
+				t.Fatal("a second install changed the file")
+			}
+			o.Uninstall = true
+			if code, out := runRaw(o); code != 0 {
+				t.Fatalf("uninstall = %d:\n%s", code, out)
+			}
+			after := string(read(t, path))
+			if strings.Contains(after, "servers") || !strings.Contains(after, "notes-mcp") ||
+				strings.Contains(after, tc.legacyCommand) != tc.keepsLegacy {
+				t.Fatalf("after uninstall:\n%s", after)
+			}
+		})
 	}
 }

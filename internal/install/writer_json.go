@@ -1,5 +1,7 @@
 package install
 
+import "strings"
+
 // The JSON writer: the one writer for every CLI whose configuration is a JSON file. It changes only the entries a
 // fileSpec names and keeps every other key, its order and its number text (ordered.go).
 
@@ -13,6 +15,9 @@ func applyJSON(root *node, f fileSpec, binary string, uninstall bool) (edited, o
 			return false, false
 		}
 		edited = edited || e
+		if f.server.legacy != nil && removeLegacy(root, f.server) {
+			edited = true
+		}
 	}
 	if f.hooks != nil {
 		var e bool
@@ -79,6 +84,28 @@ func applyEntry(root *node, e *entrySpec, binary string, uninstall bool) (edited
 		}
 	}
 	return edited, true
+}
+
+// removeLegacy removes the entry an older mairc wrote at e.legacy, when it is mairc's own: its command runs a binary
+// named mairc. A user's entry of the same name that runs something else is left alone.
+func removeLegacy(root *node, e *entrySpec) bool {
+	parent, _ := container(root, e.legacy, false)
+	if parent == nil {
+		return false
+	}
+	command, ok := serverCommand(parent.get(e.name))
+	if !ok || !isMaircBinary(command) {
+		return false
+	}
+	parent.del(e.name)
+	pruneEmpty(root, e.legacy)
+	return true
+}
+
+// isMaircBinary reports whether command is a mairc binary (by its base name, with or without .exe).
+func isMaircBinary(command string) bool {
+	base := command[strings.LastIndexAny(command, `/\`)+1:]
+	return strings.EqualFold(strings.TrimSuffix(strings.ToLower(base), ".exe"), "mairc")
 }
 
 // pruneEmpty removes the objects on keyPath, innermost first, that are now empty.

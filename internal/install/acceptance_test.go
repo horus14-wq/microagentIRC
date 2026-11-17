@@ -132,6 +132,13 @@ func withoutMairc(t *testing.T, raw string) string {
 			servers.del("mairc")
 		}
 	}
+	// OpenCode v2's mcp.servers.mairc (mairc-cpm), and the containers only it filled.
+	if mcp := root.get("mcp"); mcp != nil {
+		if servers := mcp.get("servers"); servers != nil {
+			servers.del("mairc")
+			pruneEmpty(root, []string{"mcp", "servers"})
+		}
+	}
 	removeHooks(root, &hookSpec{keyPath: []string{"hooks"}, ours: isOurHook})
 	var v any
 	if err := json.Unmarshal(root.bytes(), &v); err != nil {

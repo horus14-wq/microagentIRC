@@ -133,9 +133,9 @@ func TestStatusesFindsAProjectScopeFile(t *testing.T) {
 func TestStatusesReadsOpenCodeCommandArray(t *testing.T) {
 	home := t.TempDir()
 	bin := filepath.Join(home, "mairc")
-	body, err := json.Marshal(map[string]any{"mcp": map[string]any{
+	body, err := json.Marshal(map[string]any{"mcp": map[string]any{"servers": map[string]any{ // v2 shape (mairc-cpm)
 		"mairc": map[string]any{"type": "local", "command": []string{bin, "stdio"}},
-	}})
+	}}})
 	if err != nil {
 		t.Fatal(err)
 	}
