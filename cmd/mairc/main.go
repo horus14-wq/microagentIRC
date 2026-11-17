@@ -347,6 +347,9 @@ func runInstall(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 			return binary, nil
 		}
 		stable := stableBinaryPath(home)
+		if sameBytes(binary, stable) {
+			return stable, nil // an earlier install already copied this very binary: nothing to ask or say
+		}
 		switch {
 		case *dryRun:
 			_, _ = fmt.Fprintf(stdout, "%s sits in a temporary or Downloads directory; it would be copied to %s first\n", binary, stable)
@@ -408,6 +411,16 @@ func unstableDir(path, home string) bool {
 }
 
 // copyFile copies src to dst, creating dst's directory and giving dst mode.
+// sameBytes reports whether both files exist and hold the same bytes.
+func sameBytes(a, b string) bool {
+	x, err := os.ReadFile(a) // #nosec G304 -- the running binary's own path
+	if err != nil {
+		return false
+	}
+	y, err := os.ReadFile(b) // #nosec G304 -- stableBinaryPath under the user's home
+	return err == nil && bytes.Equal(x, y)
+}
+
 func copyFile(src, dst string, mode os.FileMode) error {
 	if err := os.MkdirAll(filepath.Dir(dst), 0o750); err != nil {
 		return err
