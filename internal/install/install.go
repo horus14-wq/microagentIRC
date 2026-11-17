@@ -42,6 +42,12 @@ const hookTimeoutSeconds = "5"
 
 // hookHandler is one fresh copy of mairc's hook handler.
 func hookHandler(binary string) *node {
+	if windowsBinary(binary) {
+		// Exec form bypasses cmd, PowerShell and Git Bash tokenization (checked 17 Nov 2026):
+		// https://code.claude.com/docs/en/hooks#exec-form-and-shell-form
+		return object("type", str("command"), "command", str(binary),
+			"args", array(str("hook"), str("--client"), str("claude")), "timeout", num(hookTimeoutSeconds))
+	}
 	return object("type", str("command"), "command", str(hookCommand(binary)), "timeout", num(hookTimeoutSeconds))
 }
 
@@ -254,7 +260,25 @@ func mcpEdit(binary string, uninstall bool) func(root *node) (bool, bool) {
 
 // hookCommand is the command Claude Code runs for each hook event.
 func hookCommand(binary string) string {
+	for _, c := range binary {
+		if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') ||
+			strings.ContainsRune("/_-.:+", c) {
+			continue
+		}
+		binary = "'" + strings.ReplaceAll(binary, "'", "'\"'\"'") + "'"
+		break
+	}
 	return binary + " hook --client claude"
+}
+
+func windowsBinary(binary string) bool {
+	return strings.HasPrefix(binary, `\\`) || strings.HasPrefix(binary, "//") || (len(binary) >= 3 && binary[1] == ':' &&
+		(binary[2] == '\\' || binary[2] == '/'))
+}
+
+func maircBinary(binary string) bool {
+	base := binary[strings.LastIndexAny(binary, `/\`)+1:]
+	return base == "mairc" || strings.EqualFold(base, "mairc.exe")
 }
 
 // isOurHook reports whether a hook handler runs `<any path>/mairc hook`.
@@ -263,8 +287,20 @@ func isOurHook(h *node) bool {
 	if !ok {
 		return false
 	}
+	if args := h.get("args"); args != nil {
+		if args.kind != arrayNode || len(args.items) == 0 {
+			return false
+		}
+		first, _ := args.items[0].stringValue()
+		return maircBinary(command) && first == "hook"
+	}
+	if quoted, found := strings.CutSuffix(command, " hook --client claude"); found &&
+		len(quoted) >= 2 && quoted[0] == '\'' && quoted[len(quoted)-1] == '\'' {
+		binary := strings.ReplaceAll(quoted[1:len(quoted)-1], "'\"'\"'", "'")
+		return maircBinary(binary) && hookCommand(binary) == command
+	}
 	fields := strings.Fields(command)
-	return len(fields) >= 2 && filepath.Base(fields[0]) == "mairc" && fields[1] == "hook"
+	return len(fields) >= 2 && maircBinary(fields[0]) && fields[1] == "hook"
 }
 
 // hooksEdit adds, updates or removes mairc's hook handler on each hook event.

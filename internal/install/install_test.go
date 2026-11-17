@@ -16,7 +16,7 @@ func golden(t *testing.T, name string) []byte {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return b
+	return nativeGolden(b)
 }
 
 func read(t *testing.T, path string) []byte {
@@ -40,6 +40,7 @@ func write(t *testing.T, path, content string, mode os.FileMode) {
 
 func run(o Options) (int, string) {
 	var out bytes.Buffer
+	o.Binary = nativeTestBinary(o.Binary)
 	o.Out = &out
 	return Run(o), out.String()
 }
@@ -87,7 +88,7 @@ func TestFreshInstallMatchesGoldenFilesForBothScopes(t *testing.T) {
 			}
 			for _, p := range []string{mcp, set} {
 				info, err := os.Stat(p)
-				if err != nil || info.Mode().Perm() != 0o600 {
+				if err != nil || info.Mode().Perm() != nativeFileMode(0o600) {
 					t.Fatalf("%s mode = %v, %v; want 0600", p, info.Mode().Perm(), err)
 				}
 				if _, err := os.Stat(p + ".mairc.bak"); err == nil {
@@ -172,15 +173,16 @@ func TestMergeKeepsOtherContentInOrderAndUninstallRestoresIt(t *testing.T) {
 	if !order(gotMCP, `"theme"`, `"mcpServers"`, `"other"`, `"mairc"`, `"zeta"`, `2.50`) {
 		t.Fatalf("mcp order lost:\n%s", gotMCP)
 	}
+	hookWord, countWord := nativeHookWords()
 	if !order(gotSet, `"model"`, `"hooks"`, `"PostToolUse"`, `"Edit|Write"`, `lint <files> & \"check\"`,
-		testBinary+` hook --client claude`, `"Stop"`, `notify-send`, `"SessionStart"`, `"UserPromptSubmit"`,
+		hookWord, `"Stop"`, `notify-send`, `"SessionStart"`, `"UserPromptSubmit"`,
 		`"permissions"`) {
 		t.Fatalf("settings order lost:\n%s", gotSet)
 	}
-	if n := strings.Count(gotSet, "mairc hook"); n != 3 {
+	if n := strings.Count(gotSet, countWord); n != 3 {
 		t.Fatalf("our hook appears %d times, want 3 (one per event)", n)
 	}
-	if info, _ := os.Stat(mcp); info.Mode().Perm() != 0o644 {
+	if info, _ := os.Stat(mcp); info.Mode().Perm() != nativeFileMode(0o644) {
 		t.Fatalf("mode not kept: %v", info.Mode().Perm())
 	}
 
