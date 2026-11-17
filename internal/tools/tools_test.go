@@ -197,6 +197,25 @@ func TestIrcSendRecipients(t *testing.T) {
 	}
 }
 
+// TestIdleReadReplyIsTwoTokens pins the idle irc_read reply that CLIs without a hook pay for on every read
+// (mairc-hd5). "nothing new" measured 2 tokens in o200k_base and cl100k_base (docs/compat.md, "Idle read reply");
+// the standard library has no tokenizer, so the test pins the exact text and a byte and word bound around it.
+func TestIdleReadReplyIsTwoTokens(t *testing.T) {
+	res := tool(t, &fakeChat{}, "irc_read").Call(ctx, &core.Session{Name: "alice"}, nil)
+	if res.IsError || res.Text != "nothing new" {
+		t.Fatalf("idle reply %+v", res)
+	}
+	words := 1
+	for _, c := range res.Text {
+		if c == ' ' {
+			words++
+		}
+	}
+	if len(res.Text) > 16 || words > 2 {
+		t.Fatalf("idle reply %q grew to %d bytes / %d words; re-measure tokens in docs/compat.md", res.Text, len(res.Text), words)
+	}
+}
+
 func TestIrcReadFormatting(t *testing.T) {
 	at := time.Date(2026, 11, 17, 9, 0, 0, 0, time.UTC)
 	f := &fakeChat{msgs: []core.Message{

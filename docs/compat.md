@@ -25,6 +25,37 @@ Five more CLIs — Pi, Goose, Cursor CLI, GitHub Copilot CLI and Amp — are in 
 | OpenCode 1.19.3 [BIN] | `opencode.json(c)`, key `mcp` -> `{name: {type, ...}}`; global `~/.config/opencode/`, project root or `.opencode/` [DOC v1][BIN] | yes: `type:"local"`, `command:[...]`, `environment` [DOC v1][BIN] | yes: `type:"remote"`, `url`, `headers` (+`oauth:false`); Streamable HTTP first, SSE fallback [DOC v1][BIN] | no shell-command hooks; JS/TS plugins (`~/.config/opencode/plugins/`, `.opencode/plugins/`) with `tool.execute.after`, `event` (`session.idle`, `session.created`...), `chat.message`, `shell.env`, `experimental.chat.system.transform` [DOC v1][BIN] | not as raw stdout; a plugin can run `mairc hook` itself and inject: mutate `output.output` in `tool.execute.after` (tool result), push into `output.system` per LLM step, or `client.session.prompt` (`noReply`) [BIN][DOC partial][UNV live] | plugin: `input.sessionID` per hook + `process.pid` == `OPENCODE_PID`; tool shells inherit `OPENCODE=1`, `AGENT=1`, `OPENCODE_PID` [BIN] | `AGENTS.md` (walk up), else `CLAUDE.md`; global `~/.config/opencode/AGENTS.md`, else `~/.claude/CLAUDE.md`; plus `instructions` [DOC v1][BIN] |
 | Prime Agent `prime-agent` 0.10.0 (Rust build; upstream v0.10.2/v0.10.3) | `~/.prime/agent/settings.json` (+ project `<cwd>/.prime/agent/settings.json`), key `mcpServers` [BIN][DOC] | yes, `"type":"stdio"` + `command/args/cwd/env` [DOC] | yes, `"type":"http"` (streamable HTTP) + `headers` map or `bearerTokenEnvVar` [BIN][DOC]; MCP is called from the Python REPL, not as native tools [DOC] | no user hook system; closest: `--autonomous-gate <cmd>` after each turn (autonomous only), background `bash()` completion notices, heartbeats, external `prime-agent send --steer/--follow-up` [BIN][DOC] | no general hook; gate output only on FAILURE in autonomous mode; `send` and `bash-done` notices DO enter context as user messages [DOC][BIN] | `PRIME_AGENT_INTERNAL_DAEMON_WORKER_ACTIVE_SESSION_ID` (= `list` id), `PRIME_AGENT_KERNEL_OWNER_PID` (worker pid); chain bash -> python kernel -> `prime-agent worker` -> daemon, no tty [BIN] | `AGENTS.md`/`AGENTS.MD`/`CLAUDE.md`/`CLAUDE.MD` (first hit per dir): agentDir global, then cwd ancestors root-first; plus `.prime/SYSTEM.md`, `APPEND_SYSTEM.md` [DOC][BIN] |
 
+## Hook or fallback
+
+| CLI | Mode | Why |
+|---|---|---|
+| Claude Code | hook | `PostToolUse` JSON `additionalContext` reaches the model [BIN live] |
+| OpenAI Codex CLI | hook | `PostToolUse` JSON `additionalContext` [DOC]; plain stdout on `SessionStart`/`UserPromptSubmit` [BIN]; hooks need approval by hash |
+| Google Gemini CLI | hook | `AfterTool` JSON `additionalContext` [DOC][BIN source] |
+| Grok Build | hook | `PostToolUse` JSON `additionalContext` [BIN docs shipped with it] |
+| Devin CLI | hook | `PostToolUse` JSON `additionalContext` reaches the model [BIN live] |
+| OpenCode | fallback | no shell-command hooks; a JS plugin could inject (`tool.execute.after`), not built [BIN source] |
+| Prime Agent | fallback | no hooks at all; MCP tools only through its `ipython` REPL [DOC repo][BIN] |
+
+A fallback CLI gets the instruction snippet in `skill/fallback.md`: call `irc_read` at the start of each task and
+after each batch of tool calls, never in a loop.
+
+### Idle read reply
+
+`irc_read` with nothing new answers `nothing new` (`internal/tools`, asserted by
+`TestIdleReadReplyIsTwoTokens`). Measured 2026-11-17 with OpenAI's tokenizers (tiktoken):
+
+| What | Bytes | o200k_base | cl100k_base |
+|---|---|---|---|
+| reply text `nothing new` | 11 | 2 | 2 |
+| MCP tool result `{"content":[{"type":"text","text":"nothing new"}]}` | 50 | 14 | 13 |
+| whole JSON-RPC response | 84 | 28 | 27 |
+
+What the model sees is the reply text inside the CLI's own tool-result framing, so the cost mairc adds to an idle
+read is the 2-token text (well under the 10-token target). Claude's and Gemini's tokenizers are not public; for
+plain English words they are of the same order [UNV]. To repeat:
+`uv run --no-project --with tiktoken python -c 'import tiktoken; print(len(tiktoken.get_encoding("o200k_base").encode("nothing new")))'`.
+
 ## What this means for mairc
 
 1. **One output form works everywhere a hook can inject: JSON on the tool event.** Claude Code, Codex, Gemini,
