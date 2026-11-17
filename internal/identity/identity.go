@@ -74,15 +74,15 @@ func isTTY(path string) bool {
 }
 
 // Ancestors returns the process ids of this process's ancestors, nearest first (parent,
-// grandparent, ...), at most max, stopping at pid 1 (not included). parentOf returns a
+// grandparent, ...), at most limit, stopping at pid 1 (not included). parentOf returns a
 // process's parent pid; ok=false ends the walk. A process whose parent is itself ends the walk.
 // In production self is os.Getpid() and parentOf is ParentOf.
-func Ancestors(self int, max int, parentOf func(pid int) (ppid int, ok bool)) []int {
-	if max <= 0 {
+func Ancestors(self int, limit int, parentOf func(pid int) (ppid int, ok bool)) []int {
+	if limit <= 0 {
 		return nil
 	}
 	var out []int
-	for pid := self; len(out) < max; {
+	for pid := self; len(out) < limit; {
 		ppid, ok := parentOf(pid)
 		if !ok || ppid <= 1 || ppid == pid {
 			return out

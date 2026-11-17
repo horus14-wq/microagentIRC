@@ -84,7 +84,7 @@ func outLines(b *bytes.Buffer) []string {
 }
 
 func TestForwardsInitializeThenToolsList(t *testing.T) {
-	d, srv := newFakeDaemon(t, func(s reqSeen, r *http.Request) (int, string, http.Header) {
+	d, srv := newFakeDaemon(t, func(s reqSeen, _ *http.Request) (int, string, http.Header) {
 		var m map[string]json.RawMessage
 		_ = json.Unmarshal([]byte(s.body), &m)
 		method := ""
@@ -122,7 +122,7 @@ func TestForwardsInitializeThenToolsList(t *testing.T) {
 }
 
 func TestNotificationWritesNothing(t *testing.T) {
-	_, srv := newFakeDaemon(t, func(s reqSeen, r *http.Request) (int, string, http.Header) {
+	_, srv := newFakeDaemon(t, func(_ reqSeen, _ *http.Request) (int, string, http.Header) {
 		return http.StatusAccepted, "", nil
 	})
 	var out bytes.Buffer
@@ -136,7 +136,7 @@ func TestNotificationWritesNothing(t *testing.T) {
 }
 
 func TestStartsDaemonWhenDown(t *testing.T) {
-	d, srv := newFakeDaemon(t, func(s reqSeen, r *http.Request) (int, string, http.Header) {
+	d, srv := newFakeDaemon(t, func(_ reqSeen, _ *http.Request) (int, string, http.Header) {
 		return http.StatusOK, `{"jsonrpc":"2.0","id":1,"result":{}}`, nil
 	})
 	d.up.Store(false)
@@ -163,7 +163,7 @@ func TestStartsDaemonWhenDown(t *testing.T) {
 }
 
 func TestDaemonNeverComesUp(t *testing.T) {
-	d, srv := newFakeDaemon(t, func(s reqSeen, r *http.Request) (int, string, http.Header) {
+	d, srv := newFakeDaemon(t, func(_ reqSeen, _ *http.Request) (int, string, http.Header) {
 		t.Error("a request reached the daemon while it was down")
 		return 500, "", nil
 	})
@@ -198,7 +198,7 @@ func TestDaemonNeverComesUp(t *testing.T) {
 
 func TestDaemonRestartReinitializes(t *testing.T) {
 	var calls atomic.Int32
-	_, srv := newFakeDaemon(t, func(s reqSeen, r *http.Request) (int, string, http.Header) {
+	_, srv := newFakeDaemon(t, func(s reqSeen, _ *http.Request) (int, string, http.Header) {
 		n := calls.Add(1)
 		var m map[string]json.RawMessage
 		_ = json.Unmarshal([]byte(s.body), &m)
@@ -234,7 +234,7 @@ func TestDaemonRestartReinitializes(t *testing.T) {
 }
 
 func TestBigLinePasses(t *testing.T) {
-	_, srv := newFakeDaemon(t, func(s reqSeen, r *http.Request) (int, string, http.Header) {
+	_, srv := newFakeDaemon(t, func(s reqSeen, _ *http.Request) (int, string, http.Header) {
 		return http.StatusOK, s.body, nil
 	})
 	var out bytes.Buffer
@@ -254,7 +254,7 @@ func TestBigLinePasses(t *testing.T) {
 }
 
 func TestInvalidJSONForwarded(t *testing.T) {
-	_, srv := newFakeDaemon(t, func(s reqSeen, r *http.Request) (int, string, http.Header) {
+	_, srv := newFakeDaemon(t, func(_ reqSeen, _ *http.Request) (int, string, http.Header) {
 		return http.StatusOK, `{"jsonrpc":"2.0","id":null,"error":{"code":-32700,"message":"parse error"}}`, nil
 	})
 	var out bytes.Buffer
@@ -268,7 +268,7 @@ func TestInvalidJSONForwarded(t *testing.T) {
 }
 
 func TestEOFReturnsNil(t *testing.T) {
-	_, srv := newFakeDaemon(t, func(s reqSeen, r *http.Request) (int, string, http.Header) {
+	_, srv := newFakeDaemon(t, func(_ reqSeen, _ *http.Request) (int, string, http.Header) {
 		return http.StatusOK, "{}", nil
 	})
 	var out bytes.Buffer

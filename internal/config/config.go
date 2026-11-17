@@ -58,7 +58,7 @@ func EnsureHome(p Paths) error {
 // naming the key.
 func Load(path string) (core.Settings, error) {
 	s := core.DefaultSettings()
-	raw, err := os.ReadFile(path)
+	raw, err := os.ReadFile(path) // #nosec G304 -- path is the caller-provided file; reading it is the function's contract
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return s, nil
@@ -128,31 +128,34 @@ type field struct {
 	get      func(*core.Settings) string
 }
 
-// The settings table of plan.md §4, in Keys() order.
-var fields = map[string]field{
-	"max_private_len":     {min: 1, max: 999, set: func(s *core.Settings, v int) { s.MaxPrivateLen = v }, get: func(s *core.Settings) string { return strconv.Itoa(s.MaxPrivateLen) }},
-	"max_public_len":      {min: 1, max: 999, set: func(s *core.Settings, v int) { s.MaxPublicLen = v }, get: func(s *core.Settings) string { return strconv.Itoa(s.MaxPublicLen) }},
-	"max_room_lines":      {min: 1, max: 100, set: func(s *core.Settings, v int) { s.MaxRoomLines = v }, get: func(s *core.Settings) string { return strconv.Itoa(s.MaxRoomLines) }},
-	"private_enabled":     {boolean: true, set: func(s *core.Settings, v int) { s.PrivateEnabled = v != 0 }, get: func(s *core.Settings) string { return strconv.FormatBool(s.PrivateEnabled) }},
-	"public_enabled":      {boolean: true, set: func(s *core.Settings, v int) { s.PublicEnabled = v != 0 }, get: func(s *core.Settings) string { return strconv.FormatBool(s.PublicEnabled) }},
-	"private_cooldown_s":  {min: 0, max: 86400, set: func(s *core.Settings, v int) { s.PrivateCooldownS = v }, get: func(s *core.Settings) string { return strconv.Itoa(s.PrivateCooldownS) }},
-	"public_cooldown_s":   {min: 0, max: 86400, set: func(s *core.Settings, v int) { s.PublicCooldownS = v }, get: func(s *core.Settings) string { return strconv.Itoa(s.PublicCooldownS) }},
-	"keep_messages":       {min: 1, max: 1000000, set: func(s *core.Settings, v int) { s.KeepMessages = v }, get: func(s *core.Settings) string { return strconv.Itoa(s.KeepMessages) }},
-	"keep_hours":          {min: 1, max: 8760, set: func(s *core.Settings, v int) { s.KeepHours = v }, get: func(s *core.Settings) string { return strconv.Itoa(s.KeepHours) }},
-	"check_private_every": {min: 1, max: 1000, set: func(s *core.Settings, v int) { s.CheckPrivateEvery = v }, get: func(s *core.Settings) string { return strconv.Itoa(s.CheckPrivateEvery) }},
-	"check_room_every":    {min: 1, max: 1000, set: func(s *core.Settings, v int) { s.CheckRoomEvery = v }, get: func(s *core.Settings) string { return strconv.Itoa(s.CheckRoomEvery) }},
-	"listen":              {listen: true, get: func(s *core.Settings) string { return s.Listen }},
-	"hook_timeout_ms":     {min: 50, max: 5000, set: func(s *core.Settings, v int) { s.HookTimeoutMS = v }, get: func(s *core.Settings) string { return strconv.Itoa(s.HookTimeoutMS) }},
+// The settings table of plan.md §4, in Keys() order. A function, not a package-level variable:
+// nothing mutable may live at package scope.
+func fields() map[string]field {
+	return map[string]field{
+		"max_private_len":     {min: 1, max: 999, set: func(s *core.Settings, v int) { s.MaxPrivateLen = v }, get: func(s *core.Settings) string { return strconv.Itoa(s.MaxPrivateLen) }},
+		"max_public_len":      {min: 1, max: 999, set: func(s *core.Settings, v int) { s.MaxPublicLen = v }, get: func(s *core.Settings) string { return strconv.Itoa(s.MaxPublicLen) }},
+		"max_room_lines":      {min: 1, max: 100, set: func(s *core.Settings, v int) { s.MaxRoomLines = v }, get: func(s *core.Settings) string { return strconv.Itoa(s.MaxRoomLines) }},
+		"private_enabled":     {boolean: true, set: func(s *core.Settings, v int) { s.PrivateEnabled = v != 0 }, get: func(s *core.Settings) string { return strconv.FormatBool(s.PrivateEnabled) }},
+		"public_enabled":      {boolean: true, set: func(s *core.Settings, v int) { s.PublicEnabled = v != 0 }, get: func(s *core.Settings) string { return strconv.FormatBool(s.PublicEnabled) }},
+		"private_cooldown_s":  {min: 0, max: 86400, set: func(s *core.Settings, v int) { s.PrivateCooldownS = v }, get: func(s *core.Settings) string { return strconv.Itoa(s.PrivateCooldownS) }},
+		"public_cooldown_s":   {min: 0, max: 86400, set: func(s *core.Settings, v int) { s.PublicCooldownS = v }, get: func(s *core.Settings) string { return strconv.Itoa(s.PublicCooldownS) }},
+		"keep_messages":       {min: 1, max: 1000000, set: func(s *core.Settings, v int) { s.KeepMessages = v }, get: func(s *core.Settings) string { return strconv.Itoa(s.KeepMessages) }},
+		"keep_hours":          {min: 1, max: 8760, set: func(s *core.Settings, v int) { s.KeepHours = v }, get: func(s *core.Settings) string { return strconv.Itoa(s.KeepHours) }},
+		"check_private_every": {min: 1, max: 1000, set: func(s *core.Settings, v int) { s.CheckPrivateEvery = v }, get: func(s *core.Settings) string { return strconv.Itoa(s.CheckPrivateEvery) }},
+		"check_room_every":    {min: 1, max: 1000, set: func(s *core.Settings, v int) { s.CheckRoomEvery = v }, get: func(s *core.Settings) string { return strconv.Itoa(s.CheckRoomEvery) }},
+		"listen":              {listen: true, get: func(s *core.Settings) string { return s.Listen }},
+		"hook_timeout_ms":     {min: 50, max: 5000, set: func(s *core.Settings, v int) { s.HookTimeoutMS = v }, get: func(s *core.Settings) string { return strconv.Itoa(s.HookTimeoutMS) }},
+	}
 }
 
 func known(key string) bool {
-	_, ok := fields[key]
+	_, ok := fields()[key]
 	return ok
 }
 
 // setJSON decodes one JSON value strictly into its field; the error names the key.
 func setJSON(s *core.Settings, key string, raw json.RawMessage) error {
-	f := fields[key]
+	f := fields()[key]
 	if f.listen {
 		var v string
 		if err := json.Unmarshal(raw, &v); err != nil {
@@ -188,7 +191,7 @@ func Validate(s core.Settings) error {
 	if !loopback(s.Listen) {
 		return errors.New("listen: must be a loopback host:port")
 	}
-	for key, f := range fields {
+	for key, f := range fields() {
 		if f.listen || f.boolean {
 			continue
 		}
@@ -236,7 +239,7 @@ func Keys() []string {
 
 // Get returns one setting as text ("256", "true", "127.0.0.1:4747").
 func Get(s core.Settings, key string) (string, error) {
-	f, ok := fields[key]
+	f, ok := fields()[key]
 	if !ok {
 		return "", fmt.Errorf("unknown setting: %s", key)
 	}
@@ -246,7 +249,7 @@ func Get(s core.Settings, key string) (string, error) {
 // Set parses value for key, stores it in s and validates the result. Booleans accept
 // true/false/on/off/1/0.
 func Set(s *core.Settings, key, value string) error {
-	f, ok := fields[key]
+	f, ok := fields()[key]
 	if !ok {
 		return fmt.Errorf("unknown setting: %s", key)
 	}
@@ -281,7 +284,7 @@ func Set(s *core.Settings, key, value string) error {
 
 // ReadToken returns the trimmed content of the token file.
 func ReadToken(path string) (string, error) {
-	raw, err := os.ReadFile(path)
+	raw, err := os.ReadFile(path) // #nosec G304 -- path is the caller-provided token file; reading it is the function's contract
 	if err != nil {
 		return "", err
 	}

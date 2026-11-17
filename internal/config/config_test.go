@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -13,34 +14,42 @@ import (
 )
 
 // The plan.md §4 table: key, min, max, default (booleans carry no numeric bounds here).
-var table = []struct {
+func table() []struct {
 	key     string
 	min     int
 	max     int
 	def     string
 	boolean bool
-}{
-	{"max_private_len", 1, 999, "256", false},
-	{"max_public_len", 1, 999, "256", false},
-	{"max_room_lines", 1, 100, "10", false},
-	{"private_enabled", 0, 0, "true", true},
-	{"public_enabled", 0, 0, "true", true},
-	{"private_cooldown_s", 0, 86400, "60", false},
-	{"public_cooldown_s", 0, 86400, "60", false},
-	{"keep_messages", 1, 1000000, "1000", false},
-	{"keep_hours", 1, 8760, "24", false},
-	{"check_private_every", 1, 1000, "1", false},
-	{"check_room_every", 1, 1000, "10", false},
-	{"listen", 0, 0, "127.0.0.1:4747", false},
-	{"hook_timeout_ms", 50, 5000, "300", false},
+} {
+	return []struct {
+		key     string
+		min     int
+		max     int
+		def     string
+		boolean bool
+	}{
+		{"max_private_len", 1, 999, "256", false},
+		{"max_public_len", 1, 999, "256", false},
+		{"max_room_lines", 1, 100, "10", false},
+		{"private_enabled", 0, 0, "true", true},
+		{"public_enabled", 0, 0, "true", true},
+		{"private_cooldown_s", 0, 86400, "60", false},
+		{"public_cooldown_s", 0, 86400, "60", false},
+		{"keep_messages", 1, 1000000, "1000", false},
+		{"keep_hours", 1, 8760, "24", false},
+		{"check_private_every", 1, 1000, "1", false},
+		{"check_room_every", 1, 1000, "10", false},
+		{"listen", 0, 0, "127.0.0.1:4747", false},
+		{"hook_timeout_ms", 50, 5000, "300", false},
+	}
 }
 
 func TestDefaultsMatchTheTable(t *testing.T) {
 	s := core.DefaultSettings()
-	if got := Keys(); len(got) != len(table) {
+	if got := Keys(); len(got) != len(table()) {
 		t.Fatalf("Keys() = %v", got)
 	}
-	for i, row := range table {
+	for i, row := range table() {
 		if Keys()[i] != row.key {
 			t.Fatalf("Keys()[%d] = %q, want %q", i, Keys()[i], row.key)
 		}
@@ -58,19 +67,19 @@ func TestDefaultsMatchTheTable(t *testing.T) {
 }
 
 func TestValidateRanges(t *testing.T) {
-	for _, row := range table {
+	for _, row := range table() {
 		if row.boolean || row.key == "listen" {
 			continue
 		}
 		for _, v := range []int{row.min, row.max} {
 			s := core.DefaultSettings()
-			if err := Set(&s, row.key, fmt.Sprint(v)); err != nil {
+			if err := Set(&s, row.key, strconv.Itoa(v)); err != nil {
 				t.Errorf("Set(%s, %d): %v", row.key, v, err)
 			}
 		}
 		for _, v := range []int{row.min - 1, row.max + 1} {
 			s := core.DefaultSettings()
-			err := Set(&s, row.key, fmt.Sprint(v))
+			err := Set(&s, row.key, strconv.Itoa(v))
 			if err == nil {
 				t.Errorf("Set(%s, %d) accepted, want refusal", row.key, v)
 				continue
@@ -216,11 +225,11 @@ func TestSaveRoundTripsAndIsAtomic(t *testing.T) {
 	// and a directory target fails without touching an existing file beside it.
 	bad := core.DefaultSettings()
 	bad.KeepHours = 0
-	old, _ := os.ReadFile(path)
+	old, _ := os.ReadFile(path) // #nosec G304 -- test file in t.TempDir
 	if err := Save(path, bad); err == nil || err.Error() != "keep_hours: must be between 1 and 8760" {
 		t.Fatalf("Save(invalid) = %v", err)
 	}
-	got, _ := os.ReadFile(path)
+	got, _ := os.ReadFile(path) // #nosec G304 -- test file in t.TempDir
 	if !bytes.Equal(old, got) {
 		t.Fatal("failed save rewrote the file")
 	}
@@ -232,7 +241,7 @@ func TestGoldenDefault(t *testing.T) {
 	if err := Save(path, core.DefaultSettings()); err != nil {
 		t.Fatal(err)
 	}
-	got, err := os.ReadFile(path)
+	got, err := os.ReadFile(path) // #nosec G304 -- test file in t.TempDir
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -319,10 +328,10 @@ func TestRun(t *testing.T) {
 			t.Fatalf("rc = %d, errOut = %s", rc, errOut)
 		}
 		lines := strings.Split(strings.TrimSpace(out.String()), "\n")
-		if len(lines) != len(table) {
+		if len(lines) != len(table()) {
 			t.Fatalf("%d lines", len(lines))
 		}
-		for i, row := range table {
+		for i, row := range table() {
 			want := row.key + " = " + row.def
 			if lines[i] != want {
 				t.Errorf("line %d = %q, want %q", i, lines[i], want)

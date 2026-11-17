@@ -6,11 +6,9 @@ import (
 	"testing"
 )
 
-var (
-	noTTY  = func() (string, bool) { return "", false }
-	yesTTY = func() (string, bool) { return "/dev/pts/7", true }
-	okCWD  = func() (string, error) { return "/home/agent/work", nil }
-)
+func noTTY() (string, bool)  { return "", false }
+func yesTTY() (string, bool) { return "/dev/pts/7", true }
+func okCWD() (string, error) { return "/home/agent/work", nil }
 
 func envOf(m map[string]string) func(string) string {
 	return func(k string) string { return m[k] }
