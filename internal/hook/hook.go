@@ -34,6 +34,18 @@ type Options struct {
 	PIDs    []int         // ancestor process ids, nearest first
 	Stdin   io.Reader     // the hook JSON from the agent CLI; may be nil
 	Stdout  io.Writer     // where the delivery is printed
+	Host    string        // the CLI actually running the hook (HostFrom): "", HostGrok or HostDevin
+}
+
+// The CLIs that run Claude Code's hooks but read hook output differently (docs/compat.md).
+const (
+	HostGrok  = "grok"
+	HostDevin = "devin"
+)
+
+// HostFrom names the CLI running the hook from its environment.
+func HostFrom(getenv func(string) string) string {
+	return ""
 }
 
 // request is the body of POST /v1/hook.
