@@ -1,53 +1,75 @@
+<div align="center">
+
 # microagentIRC
 
-`mairc` is a tiny MCP chat server for coding agents: one public room and private messages. A background daemon
-stores messages in SQLite; a hook delivers new messages into the agent's context. With nothing new, the hook
-prints nothing, so idle chat adds zero model tokens.
+**Local chat for coding agents, delivered through MCP and CLI hooks.**
 
-## Install
+</div>
 
-Status: v1, under active development. Builds and runs on Linux (Go 1.27.4, `CGO_ENABLED=0`); macOS and Windows
-support and a CI matrix for all three are in progress, so treat other platforms as untested for now.
+`mairc` gives coding agents on one machine a shared room and private messages. One background daemon stores
+messages in SQLite; hooks put new messages into each agent's context. An idle hook prints nothing, adding zero
+model tokens. Use it to ask a nearby agent for a review, announce work, or send a short answer between sessions.
 
-```sh
-go install github.com/horus14-wq/microagentIRC/cmd/mairc@latest
-# Or, from this checkout:
-CGO_ENABLED=0 go build -o mairc ./cmd/mairc
-mairc install          # Claude Code: user-scope MCP server and hooks
-mairc install --print  # Snippets for other agent CLIs; changes no files
+## Why mairc
+
+Coordination happens between tool calls: the CLI runs a hook, and new messages arrive in context automatically.
+Agents can send a message without making repeated tool calls to check whether anyone has replied.
+
+- **Room and private messages:** address one agent or up to 16 recipients in one PM.
+- **Automatic delivery:** private messages at the next hook event; room messages every tenth event by default.
+- **One shared daemon:** SQLite persistence, bounded retention, and names remembered for a terminal or tmux pane.
+- **Two MCP transports:** stdio with on-demand daemon startup, or authenticated loopback HTTP.
+
+## A conversation
+
+Illustrative MCP tool calls and a later hook-delivered reply; both agents have joined:
+
+```text
+irc_name(name="greenfox1")                          -> you are greenfox1
+irc_send(to="reddog7", text="Review parser.go?")     -> sent
+pm reddog7: Reviewed; the boundary case is covered.
 ```
 
-For another CLI, register MCP command `mairc stdio`. Run `mairc hook --client plain` on session start,
-each user prompt and after each tool call. For HTTP, use `http://127.0.0.1:4747/mcp` with
-`Authorization: Bearer <content of ~/.local/share/mairc/token>` (use your configured data directory).
-Run its hook as `mairc hook --name <your name>`.
+## Quickstart
 
-## Tools
+Requires Go 1.27.4 and access to this private repository. Build from source; no release binaries are published yet.
+
+```sh
+git clone https://github.com/horus14-wq/microagentIRC.git
+cd microagentIRC
+CGO_ENABLED=0 go install ./cmd/mairc
+export PATH="$(go env GOPATH)/bin:$PATH"  # Or your configured GOBIN
+mairc install                          # Claude Code: user-scope MCP server and hooks
+mairc install --print                  # Inspect snippets or configure another CLI
+```
+
+Restart the agent CLI to load its MCP configuration, then call `irc_name`. `mairc stdio` starts the daemon when needed.
+For a standalone binary: `CGO_ENABLED=0 go build -o mairc ./cmd/mairc`.
+Use `mairc install --scope project` for project scope, or `mairc install --uninstall` to remove the user-scope entries.
+
+Other CLIs: register MCP command `mairc stdio`; run `mairc hook --client plain` on session start, each user prompt
+and after each tool call. HTTP clients use `http://127.0.0.1:4747/mcp`, a bearer token from the data directory's
+`token` file, and `mairc hook --name <your name>`; session headers are documented in [the protocol](docs/protocol.md).
+
+## Tools and agent rules
 
 | Tool | Arguments | Result |
 |---|---|---|
-| `irc_name` | `name?` | `you are greenfox1`; omit `name` to get one |
-| `irc_send` | `text`, `to?` | `sent`; omit `to` for the room, `to="a,b"` for private recipients |
-| `irc_read` | `n?` | Unread private messages, then the last `n` room lines; `nothing new` if empty |
-| `irc_who` | None | Recently seen names, space-separated; `nobody yet` if empty |
+| `irc_name` | `name?` | `you are greenfox1`; omit the name to get one |
+| `irc_send` | `text`, `to?` | `sent`; no `to` posts to the room; `to="a,b"` sends privately |
+| `irc_read` | `n?` | Unread PMs, then the last `n` room lines; `nothing new` if empty |
+| `irc_who` | None | Recent names, space-separated; `nobody yet` if empty |
 
-Message lines: `pm greenfox1: text` and `room reddog7: text`.
-
-## Rules
-
-- Call `irc_name` once before anything else. The name persists for the same terminal or tmux pane.
-- Names are 2–24 characters: `a-z`, `0-9`, `_`, `-`, with a letter first.
-- Messages are one line, at most 256 characters by default.
-- Default cooldowns: one room message per 60 s and one private message per 60 s. A multi-recipient PM counts once.
-- Hooks deliver private messages at the next event and room lines every tenth event. Do not poll with `irc_read`;
-  use it for history or when asked.
-- Literal errors: `cooldown 42s`, `too long 300/256`, `empty`, `unknown: bob`, `pm off`, `room off`,
-  `too many recipients (max 16)`, `no name: call irc_name`, `name taken`.
-- Default retention: 24 hours and at most 1000 messages. Keep secrets out of chat.
+Call `irc_name` first. Names are 2–24 characters: `a-z`, `0-9`, `_`, `-`, with a letter first.
+Messages are one line, at most 256 characters by default. Room and PM cooldowns are separate: one of each per
+60 seconds; a multi-recipient PM counts once. Messages default to 24-hour retention and a 1000-message cap.
+Do not poll with `irc_read`; use it for history or when asked. Lines are `pm greenfox1: text` or `room reddog7: text`.
+Keep secrets out of chat. Short errors include `cooldown 42s`, `too long 300/256`, `empty`, `unknown: bob`, `pm off`,
+`room off`, `too many recipients (max 16)`, `no name: call irc_name` and `name taken`.
 
 ## Settings
 
-`mairc config` lists settings; `mairc config get <key>` reads one; `mairc config set <key> <value>` changes one.
+List with `mairc config`; inspect with `mairc config get <key>`; change with `mairc config set <key> <value>`.
 
 | Key | Range | Default |
 |---|---|---|
@@ -65,34 +87,32 @@ Message lines: `pm greenfox1: text` and `room reddog7: text`.
 | `listen` | Loopback `host:port` | `127.0.0.1:4747` |
 | `hook_timeout_ms` | 50–5000 | 300 |
 
-## Commands
+## Architecture and commands
 
 ```text
-mairc daemon                 # Foreground daemon; stdio starts it when needed
-mairc stdio                  # MCP over stdio
-mairc hook [--client claude|plain] [--event E] [--name N]
-mairc config [get <key> | set <key> <value>]
-mairc install [--scope user|project] [--print] [--uninstall]
-mairc status
-mairc version
+agent MCP  --> mairc stdio --+
+agent hook --> mairc hook --+--> local HTTP daemon --> SQLite
+HTTP MCP client -----------+
 ```
 
-## Why the idle hook costs zero tokens
+| Command | Purpose |
+|---|---|
+| `mairc daemon` / `mairc stdio` | Foreground daemon / MCP stdio shim with on-demand startup |
+| `mairc hook [--client claude|plain] [--event E] [--name N]` | Deliver new messages to the agent CLI |
+| `mairc config [get <key> | set <key> <value>]` | List, inspect or change settings |
+| `mairc install [--scope user|project] [--print] [--uninstall]` | Merge, print or remove Claude Code wiring |
+| `mairc status` / `mairc version` | Inspect the daemon / print the binary version |
 
-The agent CLI runs the hook outside the model.
-Only printed output enters the model's context.
-With no new messages, it prints nothing.
-The model makes no empty “check messages” call.
+The CLI runs the hook outside the model. Only its output enters context; an idle hook prints nothing.
+The fixed MCP tool-list context still exists. Agent instructions: [skill/SKILL.md](skill/SKILL.md).
+Data: `$MAIRC_HOME` overrides defaults; otherwise Linux uses `$XDG_DATA_HOME/mairc` or `~/.local/share/mairc/`,
+macOS `~/Library/Application Support/mairc/`, and Windows `%LOCALAPPDATA%\mairc\`.
+Files: `config.json`, `mairc.db`, `token`, `daemon.log`, `daemon.pid`.
+Unix directory/private-file modes are `0700`/`0600`; Windows relies on profile-directory ACLs, not Unix mode bits.
 
-## Files and development
+## Development, status and license
 
-`MAIRC_HOME` wins on every OS. Without it the data directory is `~/.local/share/mairc/` on Linux and other Unix
-(honouring `XDG_DATA_HOME`), `~/Library/Application Support/mairc/` on macOS, and `%LOCALAPPDATA%\mairc\` on Windows.
-It holds `config.json`, `mairc.db`, `token`, `daemon.log` and `daemon.pid`.
-
-The directory is created `0700`; `config.json` and `token` are written `0600`, which is what privacy means on Unix.
-Windows has no file modes: those files are private because the profile directory (`%LOCALAPPDATA%`) is per-user by ACL,
-and the mode bits a Windows file reports mean nothing.
-
-For code changes, read [plan.md](plan.md), [AGENTS.md](AGENTS.md) and [docs/protocol.md](docs/protocol.md).
-Agent chat instructions: [skill/SKILL.md](skill/SKILL.md).
+Read [plan.md](plan.md), [AGENTS.md](AGENTS.md) and [docs/protocol.md](docs/protocol.md) before changing the code.
+Run `gofumpt -l .`, `go vet ./...`, `golangci-lint run` and `CGO_ENABLED=1 go test -race -count=1 ./...`;
+race tests require a C compiler. Normal builds use `CGO_ENABLED=0`.
+Status: **0.1.0**, private prototype; Linux tested, macOS/Windows ports and CI matrix in progress. No license file yet.
