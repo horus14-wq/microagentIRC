@@ -183,7 +183,7 @@ HTTP MCP client -----------+
 | `mairc config [get <key> \| set <key> <value>]` | List, inspect or change settings |
 | `mairc install [--only cli,...] [--user\|--project] [--dry-run] [--yes] [--uninstall] [--print]` | Set up, preview or remove mairc in every detected CLI |
 | `mairc status` / `mairc version` | Inspect the daemon / print the binary version |
-| `mairc token rotate \| add <machine> \| list \| revoke <machine>` | Replace the hub token, or give another machine a token of its own and take it away again; in force at once, nothing restarts ([security](docs/security.md)) |
+| `mairc token rotate [--now] \| add <machine> \| list \| revoke <machine>` | Replace the hub token (the old one keeps working for this machine's agents for a day unless `--now`), or give another machine a token of its own and take it away again; in force at once ([security](docs/security.md)) |
 | `mairc doctor [--only cli,...] [--live] [--yes] [--scope user\|project]` | Check the daemon and each CLI's entry (with `--only`, just those CLIs), naming the fix for anything missing; a step mairc cannot see, such as approving Codex's hook in `/hooks`, is named instead of reported ok; `--live` also runs each CLI once to check delivery (it asks first: the run spends your tokens) |
 
 The CLI runs the hook outside the model. Only its output enters context; an idle hook prints nothing.

@@ -96,3 +96,53 @@ func TestWriteTokenReplacesTheFileAndKeepsItPrivate(t *testing.T) {
 		t.Fatal("the temporary file was left behind")
 	}
 }
+
+// A rotated hub token is kept as a machine token of the hub's own machine with an end (mairc-edl): it is live
+// before the end and not after, replaces an earlier kept token, and stores a hash, never the token.
+func TestKeepPreviousHasAnEnd(t *testing.T) {
+	path := MachinesPath(filepath.Join(t.TempDir(), "token"))
+	now := time.Date(2026, 11, 17, 18, 0, 0, 0, time.UTC)
+	old, _ := NewToken()
+	if err := KeepPrevious(path, "hubbox", old, now, now.Add(24*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	got, err := LoadMachines(path)
+	if err != nil || got["hubbox"].SHA256 != HashToken(old) || got["hubbox"].Until != "2026-11-18T18:00:00Z" {
+		t.Fatalf("kept: %+v %v", got, err)
+	}
+	raw, _ := os.ReadFile(path) // #nosec G304 -- a file this test wrote in t.TempDir
+	if strings.Contains(string(raw), old) {
+		t.Fatal("machines.json holds the old token itself")
+	}
+	m := got["hubbox"]
+	for _, tc := range []struct {
+		at   time.Time
+		want bool
+	}{
+		{now, true},
+		{now.Add(24*time.Hour - time.Second), true},
+		{now.Add(24 * time.Hour), false},
+		{now.Add(48 * time.Hour), false},
+	} {
+		if m.Live(tc.at) != tc.want {
+			t.Errorf("Live at %s = %v, want %v", tc.at.Format(time.RFC3339), !tc.want, tc.want)
+		}
+	}
+	if !(Machine{SHA256: "x"}).Live(now.Add(1000 * time.Hour)) {
+		t.Error("a token without an end is not live")
+	}
+	if (Machine{Until: "not a time"}).Live(now) {
+		t.Error("an unreadable end counts as live")
+	}
+	// A second rotation inside the day replaces the kept token.
+	newer, _ := NewToken()
+	if err := KeepPrevious(path, "hubbox", newer, now, now.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := LoadMachines(path); len(got) != 1 || got["hubbox"].SHA256 != HashToken(newer) {
+		t.Fatalf("after a second rotation: %+v", got)
+	}
+	if err := KeepPrevious(path, "Not A Host", old, now, now); err == nil {
+		t.Fatal("an invalid machine name was accepted")
+	}
+}

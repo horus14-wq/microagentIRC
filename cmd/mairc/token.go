@@ -4,14 +4,19 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"sort"
 	"time"
 
 	"github.com/horus14-wq/microagentIRC/internal/config"
+	"github.com/horus14-wq/microagentIRC/internal/identity"
 )
 
 // subcommandUsage is the usage line of `mairc token`.
-const subcommandUsage = "usage: mairc token rotate | add <machine> | list | revoke <machine>"
+const subcommandUsage = "usage: mairc token rotate [--now] | add <machine> | list | revoke <machine>"
+
+// previousTokenGrace is how long a rotated hub token keeps working for the hub's own agents.
+const previousTokenGrace = 24 * time.Hour
 
 // runToken implements `mairc token`: the hub's own token and the tokens of the other machines that join it.
 //
@@ -34,7 +39,8 @@ func runToken(args []string, getenv func(string) string, stdout, stderr io.Write
 		return 1
 	}
 	switch {
-	case len(args) == 1 && args[0] == "rotate":
+	case (len(args) == 1 || len(args) == 2 && args[1] == "--now") && args[0] == "rotate":
+		atOnce := len(args) == 2
 		old, _ := config.ReadToken(p.Token) // "" when there was none yet
 		if err := config.EnsureHome(p); err != nil {
 			return fail(err)
@@ -43,11 +49,32 @@ func runToken(args []string, getenv func(string) string, stdout, stderr io.Write
 		if err != nil {
 			return fail(err)
 		}
+		// Agents already running on this machine hold the old token in memory, and a shim started by an older
+		// mairc cannot read the new one: unless told to cut it off now, the old token keeps working for this
+		// machine's own agents (and for nothing else) for a day, so that nobody is locked out mid-task.
+		here := identity.HostName(os.Hostname)
+		now := time.Now()
+		switch {
+		case atOnce:
+			if _, err := config.RevokeMachine(machines, here); err != nil {
+				return fail(err)
+			}
+		case old != "":
+			if err := config.KeepPrevious(machines, here, old, now, now.Add(previousTokenGrace)); err != nil {
+				return fail(err)
+			}
+		}
 		if err := config.WriteToken(p.Token, fresh); err != nil {
 			return fail(err)
 		}
 		_, _ = fmt.Fprintln(stdout, "new hub token written to", p.Token)
-		_, _ = fmt.Fprintln(stdout, "machines that hold a copy of the old hub token must be given the new one (or better, their own: mairc token add <machine>)")
+		if atOnce {
+			_, _ = fmt.Fprintln(stdout, "the old token is refused from now on: agents on this machine that were started by an older mairc cannot send until their CLI is restarted")
+		} else if old != "" {
+			_, _ = fmt.Fprintf(stdout, "the old token keeps working until %s, for agents on this machine only (%s); `mairc token rotate --now` cuts it off at once\n",
+				now.Add(previousTokenGrace).UTC().Format(time.RFC3339), here)
+		}
+		_, _ = fmt.Fprintln(stdout, "other machines that hold a copy of the old hub token must be given their own: mairc token add <machine>")
 		return applied(p, old, stdout, stderr)
 	case len(args) == 2 && args[0] == "add":
 		if err := config.EnsureHome(p); err != nil {
@@ -75,6 +102,10 @@ func runToken(args []string, getenv func(string) string, stdout, stderr io.Write
 		}
 		sort.Strings(names)
 		for _, name := range names {
+			if until := listed[name].Until; until != "" {
+				_, _ = fmt.Fprintf(stdout, "%s  since %s  (the previous hub token, until %s)\n", name, listed[name].Created, until)
+				continue
+			}
 			_, _ = fmt.Fprintf(stdout, "%s  since %s\n", name, listed[name].Created)
 		}
 		return 0

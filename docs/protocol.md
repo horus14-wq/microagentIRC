@@ -22,9 +22,14 @@ names their machine, and process ids are matched per machine.
     - `POST /v1/hook` must carry a seat on that machine and no `name`, else `403`; and whatever the request
       resolves to, messages are handed over only for a name whose seat is on that machine;
     - `POST /v1/reload` answers `403`; `GET /v1/status` is allowed.
-  Tokens are read again on `POST /v1/reload` (`mairc token rotate|add|revoke` ask for it): a rotated hub token
-  replaces the old one at once, and a revoked machine's token and sessions are gone at once. A shim that is
-  answered `401` reads its token file again and retries once.
+  Tokens are read again on `POST /v1/reload` (`mairc token rotate|add|revoke` ask for it) and once a minute. A
+  revoked machine's token and sessions are gone at once. A rotated hub token is replaced at once as the hub token;
+  the old one is then kept for 24 hours as a machine token of the hub's own machine (an entry in `machines.json`
+  with an `until` time), so that agents already running there, whose shim may be too old to read the new token,
+  are not cut off: it works for that machine's seats only and cannot reload. `mairc token rotate --now` keeps
+  nothing. A shim that is answered `401` reads its token file again and retries once.
+  A shim that initializes again sends the id of the session it had; the daemon retires that session when it is in
+  the same seat, so the agent keeps its seat and its name.
 - **Bodies.** A request body larger than 64 KiB answers `413`.
 - **Methods.** A known path with another method answers `405` with an `Allow` header. An unknown path answers
   `404` (after auth).

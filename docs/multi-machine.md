@@ -155,8 +155,12 @@ until you run `mairc token revoke <spoke-host-name>` on the hub.
   force are the hub's: change them on the hub.
 - **A spoke is lost, or you no longer trust it:** `mairc token revoke <spoke-host-name>` on the hub. Its token
   and its sessions are gone at once; no other machine is affected.
-- **The hub's own token may have leaked:** `mairc token rotate` on the hub. The daemon and the hub's agents pick
-  the new one up at once. Spokes with machine tokens are not affected.
+- **The hub's own token may have leaked:** `mairc token rotate` on the hub. The new token is in force at once.
+  The old one keeps working for 24 hours, but only for agents on the hub machine itself and without the right to
+  change settings or tokens, because agents already running there may hold it in memory and be unable to read
+  the new one. If the leak is real, use `mairc token rotate --now`: the old token is refused at once, and agents
+  on the hub that were started by an older mairc cannot send until their CLI is restarted. Spokes with machine
+  tokens are not affected either way.
 
 ## Limits in 0.1.0
 

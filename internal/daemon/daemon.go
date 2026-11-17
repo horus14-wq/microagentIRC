@@ -125,7 +125,7 @@ func run(ctx context.Context, o Options, logf func(format string, args ...any)) 
 	srv := newServer(service, mcp.New(serverName, o.Version, tools.All(service)), token, o.Version, reload,
 		o.Clock, logf)
 	// The machine tokens beside the hub token, now and on every reload (`mairc token rotate|add|revoke`).
-	srv.loadTokens = func() (string, map[string]string, error) { return loadTokens(o.Paths.Token) }
+	srv.loadTokens = func() (string, map[string]string, error) { return loadTokens(o.Paths.Token, o.Clock.Now()) }
 	hub, machines, err := srv.loadTokens()
 	if err != nil {
 		_ = ln.Close()
@@ -167,6 +167,10 @@ func run(ctx context.Context, o Options, logf func(format string, args ...any)) 
 				logf("error: prune: %v", err)
 			}
 			srv.dropIdle(ctx, now)
+			// Tokens with an end stop working within a minute of it, with no reload asked for.
+			if hub, machines, err := srv.loadTokens(); err == nil {
+				srv.setTokens(hub, machines)
+			}
 		case err := <-served:
 			return err
 		case <-ctx.Done():
@@ -224,7 +228,7 @@ func (c *current) set(s core.Settings) {
 // with config.json, 0600 is the Unix guarantee; on Windows the file is private because the data directory is per-user.
 // loadTokens reads what the daemon accepts: the hub token, and for each machine token its SHA-256 and the machine
 // it belongs to.
-func loadTokens(tokenPath string) (hub string, machines map[string]string, err error) {
+func loadTokens(tokenPath string, now time.Time) (hub string, machines map[string]string, err error) {
 	if hub, err = config.ReadToken(tokenPath); err != nil {
 		return "", nil, err
 	}
@@ -237,7 +241,8 @@ func loadTokens(tokenPath string) (hub string, machines map[string]string, err e
 	}
 	machines = make(map[string]string, len(listed))
 	for name, m := range listed {
-		if config.ValidMachine(name) && len(m.SHA256) == 64 {
+		// A token with an end (a rotated hub token kept for a while) is dropped once the end has passed.
+		if config.ValidMachine(name) && len(m.SHA256) == 64 && m.Live(now) {
 			machines[m.SHA256] = name
 		}
 	}

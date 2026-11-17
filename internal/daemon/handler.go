@@ -475,6 +475,17 @@ func (s *server) newSession(r *http.Request, machine string) (string, core.Sessi
 	// One attach at a time: two agents arriving together from one seat must not both be given its name.
 	s.attach.Lock()
 	defer s.attach.Unlock()
+	// A shim that initializes again (its session was refused: the daemon forgot it, or its token now has another
+	// scope) still sends the id of the session it had. That session is this same agent's, in this same seat: it
+	// is retired here, or it would count as another live agent in the seat and cost this one its name.
+	if prev := r.Header.Get(headerSession); prev != "" {
+		s.mu.Lock()
+		if old := s.sessions[prev]; old != nil && old.Seat == sess.Seat {
+			s.index(old, -1)
+			delete(s.sessions, prev)
+		}
+		s.mu.Unlock()
+	}
 	if sess.Seat != "" {
 		name, err := s.nameForSeat(r.Context(), sess.Seat)
 		if err != nil {

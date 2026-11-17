@@ -31,6 +31,37 @@ func MachinesPath(tokenPath string) string {
 type Machine struct {
 	SHA256  string `json:"sha256"`  // of the token, hex
 	Created string `json:"created"` // RFC 3339, UTC
+	// Until, when set, is when the token stops working by itself (RFC 3339, UTC). It is set on the entry that keeps
+	// a rotated hub token alive for the hub's own agents for a while (KeepPrevious).
+	Until string `json:"until,omitempty"`
+}
+
+// Live reports whether the token is still good at now: one without an end always is.
+func (m Machine) Live(now time.Time) bool {
+	if m.Until == "" {
+		return true
+	}
+	until, err := time.Parse(time.RFC3339, m.Until)
+	return err == nil && now.Before(until)
+}
+
+// KeepPrevious lists the hub token that was just replaced as a machine token of the hub's own machine, good until
+// the given time. A shim holds its token in memory, and one started by a mairc older than the re-read on 401 can
+// never learn the new token: without this, a rotation cuts every such running agent off (it did, on a real host).
+// Listed this way the old token works only for seats on the hub's machine, cannot change settings or tokens, and
+// ends by itself. An entry of the same name is replaced.
+func KeepPrevious(path, hubMachine, oldToken string, now, until time.Time) error {
+	if !ValidMachine(hubMachine) {
+		return errors.New("this machine's host name cannot name a machine token: " + hubMachine)
+	}
+	machines, err := LoadMachines(path)
+	if err != nil {
+		return err
+	}
+	machines[hubMachine] = Machine{
+		SHA256: HashToken(oldToken), Created: now.UTC().Format(time.RFC3339), Until: until.UTC().Format(time.RFC3339),
+	}
+	return SaveMachines(path, machines)
 }
 
 // NewToken returns a fresh token: 32 random bytes as 64 hexadecimal characters.

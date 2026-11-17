@@ -201,3 +201,41 @@ func TestTokensAreReloadedAndARevokedMachineIsOut(t *testing.T) {
 		t.Errorf("after a failed reload the token in force: %d", rec.Code)
 	}
 }
+
+// A shim whose session is refused initializes again and still sends the old session's id. The old session is the
+// same agent's: it is retired, so the agent keeps its seat and its name. Before, the old session (still watched)
+// counted as another live agent in the seat, and the agent came back without a name (found by rotating a token
+// while agents ran: mairc-edl). A session id with another seat retires nothing.
+func TestAShimThatInitializesAgainKeepsItsName(t *testing.T) {
+	f := boundFixture(t)
+	const seat = "@pc/tmux:%1"
+	first, _ := attach(t, f, seat, 100)
+	if got := call(t, f.srv, first, "irc_name", `{"name":"fox"}`); got != "you are fox" {
+		t.Fatal(got)
+	}
+	stop := watching(t, f, first) // the shim is alive and watching: the session is known to be live
+	defer stop()
+
+	again := do(f.srv, http.MethodPost, "/mcp", map[string]string{
+		headerSeat: seat, headerWatch: "1", headerSession: first,
+	}, initializeBody)
+	second := again.Header().Get(headerSession)
+	if again.Code != http.StatusOK || again.Header().Get(headerSeat) != seat || sessionName(f, second) != "fox" {
+		t.Fatalf("initializing again: %d, seat %q, name %q; want the same seat and fox",
+			again.Code, again.Header().Get(headerSeat), sessionName(f, second))
+	}
+	if got := sessionName(f, first); got != "<no session>" {
+		t.Fatalf("the old session is still there as %q", got)
+	}
+
+	// Another agent that somehow presents that id from another seat retires nothing and gets no name.
+	other := do(f.srv, http.MethodPost, "/mcp", map[string]string{
+		headerSeat: "@pc/tmux:%2", headerWatch: "1", headerSession: second,
+	}, initializeBody)
+	if got := sessionName(f, other.Header().Get(headerSession)); got != "" {
+		t.Fatalf("a session id from another seat gave the name %q", got)
+	}
+	if got := sessionName(f, second); got != "fox" {
+		t.Fatalf("fox's session was retired by another seat: %q", got)
+	}
+}

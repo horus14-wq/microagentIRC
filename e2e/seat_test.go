@@ -368,19 +368,86 @@ func TestTheHubTokenIsRotatedWithoutARestart(t *testing.T) {
 	if fresh == old || len(fresh) != 64 || strings.Contains(out, fresh) || strings.Contains(out, old) {
 		t.Fatalf("the token was not replaced, or a token was printed:\n%s", out)
 	}
-	if got := w.statusAs(old); got != http.StatusUnauthorized {
-		t.Fatalf("the old token still answers %d", got)
-	}
 	if got := w.statusAs(fresh); got != http.StatusOK {
 		t.Fatalf("the new token answers %d", got)
 	}
-	// The shim was started with the old token: it reads the file again when refused and carries on, same name.
+	// The shim was started with the old token; it carries on, same name.
 	a.ok("irc_send", map[string]any{"text": "after"})
 	if got := a.ok("irc_read", map[string]any{"n": 5}); got != "room "+name+": before\nroom "+name+": after" {
 		t.Fatalf("after the rotation irc_read answered %q", got)
 	}
 	// The hook reads the token on every run.
 	w.silent("seat-a", "--client", "plain", "--event", "PostToolUse")
+
+	// A shim started by a mairc that cannot re-read its token keeps presenting the old one. For a day the old
+	// token still works, but only as this machine's own agents (mairc-edl: a rotation on a real host locked out
+	// every such running agent). The machine's name is in the rotate output.
+	m := regexp.MustCompile(`for agents on this machine only \(([a-z0-9.-]+)\)`).FindStringSubmatch(out)
+	if m == nil {
+		t.Fatalf("token rotate does not say how long the old token works:\n%s", out)
+	}
+	here := m[1]
+	if got := w.initializeAs(old, "@"+here+"/tmux:%1"); got != http.StatusOK {
+		t.Fatalf("the old token for a seat on this machine, inside the day: %d", got)
+	}
+	if got := w.initializeAs(old, "@elsewhere/tmux:%1"); got != http.StatusForbidden {
+		t.Fatalf("the old token for another machine's seat: %d, want 403", got)
+	}
+	if got := w.reloadAs(old); got != http.StatusForbidden {
+		t.Fatalf("the old token asking for a reload: %d, want 403", got)
+	}
+	if list, _ := w.mairc("token", "list"); !strings.Contains(list, here+"  since ") || !strings.Contains(list, "(the previous hub token, until ") {
+		t.Fatalf("token list does not show the kept token:\n%s", list)
+	}
+
+	// --now is for a suspected leak: the old token is refused at once.
+	latest := w.token()
+	out, code = w.mairc("token", "rotate", "--now")
+	if code != 0 || !strings.Contains(out, "the old token is refused from now on") {
+		t.Fatalf("token rotate --now = %d:\n%s", code, out)
+	}
+	for which, token := range map[string]string{"the first token": old, "the token just replaced": latest} {
+		if got := w.statusAs(token); got != http.StatusUnauthorized {
+			t.Fatalf("after --now %s answers %d, want 401", which, got)
+		}
+	}
+	if got := w.statusAs(w.token()); got != http.StatusOK {
+		t.Fatalf("the newest token answers %d", got)
+	}
+	a.ok("irc_send", map[string]any{"text": "after --now"}) // this shim re-reads its token
+}
+
+// initializeAs opens an MCP session with a token and a seat and returns the HTTP status.
+func (w *world) initializeAs(token, seat string) int {
+	w.t.Helper()
+	return w.requestAs(token, "/mcp", map[string]string{"X-Mairc-Seat": seat},
+		`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}`)
+}
+
+// reloadAs asks the daemon to reload with a token and returns the HTTP status.
+func (w *world) reloadAs(token string) int {
+	w.t.Helper()
+	return w.requestAs(token, "/v1/reload", nil, "")
+}
+
+func (w *world) requestAs(token, path string, headers map[string]string, body string) int {
+	w.t.Helper()
+	ctx, cancel := context.WithTimeout(w.t.Context(), wait)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, w.base+path, strings.NewReader(body))
+	if err != nil {
+		w.t.Fatal(err)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	for key, value := range headers {
+		req.Header.Set(key, value)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		w.t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	return resp.StatusCode
 }
 
 // A machine gets a token of its own: it works for that machine's seats only, and revoking it puts the machine out
