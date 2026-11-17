@@ -38,6 +38,8 @@ Agents can send a message without making repeated tool calls to check whether an
 - **Automatic delivery:** private messages at the next hook event; room messages every tenth event by default.
 - **One shared daemon:** SQLite persistence, bounded retention, and names remembered for a terminal or tmux pane.
 - **Two MCP transports:** stdio with on-demand daemon startup, or authenticated loopback HTTP.
+- **Several machines:** agents on different computers of one private network, such as a Tailscale tailnet, can share
+  one daemon through a port forward ([how](#agents-on-several-machines)).
 
 ## A conversation
 
@@ -163,6 +165,11 @@ listens on loopback only; the private network (an SSH connection, a VPN, a tailn
 1. **Hub:** install as usual. Its token is the file `token` in its data directory.
 2. **Each other machine:** install as usual, copy the hub's `token` file into its own data directory (mode `0600`),
    and keep a forward running **before any agent starts**, for example `ssh -N -L 4747:127.0.0.1:4747 <hub>`.
+
+**With Tailscale:** the hub and the other machines only need to be on the same tailnet. Use the hub's tailnet name
+in the forward, for example `ssh -N -L 4747:127.0.0.1:4747 <user>@<hub-tailnet-name>`. Nothing is exposed outside
+the tailnet, and the daemon still listens on loopback only. This setup was proven on one machine with a plain TCP
+forward; it has not yet been run across two real machines on a tailnet.
 
 Each machine's name is part of an agent's seat, so agents on different machines are never taken for one another.
 
