@@ -270,3 +270,20 @@ func TestLiveCommandOnlyForRecordedCLIs(t *testing.T) {
 		t.Error("LiveCommand(devin) guessed a command")
 	}
 }
+
+// mairc-dhe: a hook the CLI runs only after a step mairc cannot see (Codex: approval in /hooks) is not reported as a
+// plain ok: doctor says it cannot be checked from outside and names the step. It is not counted as a problem.
+func TestHookNeedingApprovalIsNotPlainOk(t *testing.T) {
+	s := fake(t, "codex", true, true, false)
+	s.HookNotice = "codex: approve the mairc hook once: start codex and run /hooks"
+	out, code := runOne(t, s, healthyDaemon())
+	if code != 0 {
+		t.Fatalf("exit = %d, want 0", code)
+	}
+	if !strings.Contains(out, "codex: MCP and hook in place — not checkable from outside: approve the mairc hook once: start codex and run /hooks") {
+		t.Errorf("output lacks the approval line:\n%s", out)
+	}
+	if strings.Contains(out, "codex: ok") {
+		t.Errorf("output still says plain ok:\n%s", out)
+	}
+}

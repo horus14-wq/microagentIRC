@@ -22,6 +22,9 @@ type Status struct {
 	HookPath    string
 	HookPresent bool
 	HookCommand string // the command the hook runs, as recorded ("" when absent)
+	// HookNotice is a step only the user can take before the CLI runs the hook (e.g. approving it in the CLI);
+	// mairc cannot check it from outside. "" when there is none.
+	HookNotice string
 	// Fallback: the instruction file that carries the "read chat yourself" note for a CLI with no hook.
 	FallbackPath    string
 	FallbackPresent bool
@@ -85,7 +88,7 @@ func statusOf(c cliSpec, scope string, o Options) Status {
 			}
 		case f.hooks != nil:
 			if s.HookPath == "" {
-				s.HookPath = f.path
+				s.HookPath, s.HookNotice = f.path, f.notice
 			}
 			if len(raw) == 0 {
 				continue

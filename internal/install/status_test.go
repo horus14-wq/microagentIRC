@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -164,5 +165,36 @@ func TestTOMLStringRoundTrips(t *testing.T) {
 		if _, ok := tomlUnquote(bad); ok {
 			t.Errorf("tomlUnquote(%q) accepted", bad)
 		}
+	}
+}
+
+// mairc-dhe: doctor --only reads Statuses with Only, so a CLI that is merely detected is not checked or counted;
+// an unknown name is the same usage error install gives.
+func TestStatusesOnlyNamesExactlyTheCLIsAskedFor(t *testing.T) {
+	home := t.TempDir()
+	writeFile(t, filepath.Join(home, ".codex", "config.toml"), "model = \"gpt-5\"\n")
+	writeFile(t, filepath.Join(home, ".claude.json"), "{}")
+	got := Statuses(Options{Scope: "user", Home: home, Only: []string{"claude"}})
+	if len(got) != 1 || got[0].Name != "claude" {
+		t.Fatalf("Statuses(Only claude) = %+v, want only claude", got)
+	}
+	if msg := CheckNames([]string{"claude", "vim"}); !strings.HasPrefix(msg, "usage: unknown CLI vim (supported: ") {
+		t.Errorf("CheckNames(vim) = %q", msg)
+	}
+	if msg := CheckNames([]string{"claude", "codex"}); msg != "" {
+		t.Errorf("CheckNames(claude, codex) = %q, want empty", msg)
+	}
+}
+
+// mairc-dhe: the hook file's notice (a step only the user can take, like approving Codex's hook) reaches doctor.
+func TestStatusesCarriesTheHookNotice(t *testing.T) {
+	home := t.TempDir()
+	writeFile(t, filepath.Join(home, ".codex", "config.toml"), "model = \"gpt-5\"\n")
+	codex := statusFor(t, Options{Scope: "user", Home: home}, "codex")
+	if codex.HookNotice != "codex: approve the mairc hook once: start codex and run /hooks" {
+		t.Errorf("codex hook notice = %q", codex.HookNotice)
+	}
+	if claude := statusFor(t, Options{Scope: "user", Home: home, Only: []string{"claude"}}, "claude"); claude.HookNotice != "" {
+		t.Errorf("claude hook notice = %q, want none", claude.HookNotice)
 	}
 }

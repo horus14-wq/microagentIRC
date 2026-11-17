@@ -18,6 +18,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 )
 
@@ -244,6 +245,17 @@ func summary(done, failed []*cliRun, o Options) string {
 		}
 	}
 	return fmt.Sprintf("summary: %s %s; skipped %s", verb, names(done), names(sorted))
+}
+
+// CheckNames returns the usage error install gives for the first name the table does not know, or "" when every
+// name is a supported CLI (for commands such as doctor that take the same --only list).
+func CheckNames(names []string) string {
+	for _, name := range names {
+		if !slices.ContainsFunc(clis(), func(c cliSpec) bool { return c.name == name }) {
+			return fmt.Sprintf("usage: unknown CLI %s (supported: %s)", name, cliNames())
+		}
+	}
+	return ""
 }
 
 // selectCLIs returns the CLIs to set up: those named by --only (an unknown name is a usage error), else every

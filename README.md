@@ -179,7 +179,7 @@ HTTP MCP client -----------+
 | `mairc config [get <key> \| set <key> <value>]` | List, inspect or change settings |
 | `mairc install [--only cli,...] [--user\|--project] [--dry-run] [--yes] [--uninstall] [--print]` | Set up, preview or remove mairc in every detected CLI |
 | `mairc status` / `mairc version` | Inspect the daemon / print the binary version |
-| `mairc doctor [--live] [--yes] [--scope user\|project]` | Check the daemon and each CLI's entry, naming the fix for anything missing; `--live` also runs each CLI once to check delivery (it asks first: the run spends your tokens) |
+| `mairc doctor [--only cli,...] [--live] [--yes] [--scope user\|project]` | Check the daemon and each CLI's entry (with `--only`, just those CLIs), naming the fix for anything missing; a step mairc cannot see, such as approving Codex's hook in `/hooks`, is named instead of reported ok; `--live` also runs each CLI once to check delivery (it asks first: the run spends your tokens) |
 
 The CLI runs the hook outside the model. Only its output enters context; an idle hook prints nothing.
 The fixed MCP tool-list context still exists. Agent instructions: [skill/SKILL.md](skill/SKILL.md).

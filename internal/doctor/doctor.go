@@ -180,6 +180,12 @@ func cli(c install.Status, p Probes) (bool, string) {
 	case strings.TrimSpace(output) != "":
 		return false, fmt.Sprintf("%s: the hook printed something with nothing new (%q) — check `%s`, then run `mairc install --only %s`", c.Name, firstLine(output), c.HookCommand, c.Name)
 	}
+	if c.HookNotice != "" {
+		// The CLI runs the hook only after a step mairc cannot see (approving it, trusting the folder): say so
+		// instead of a plain ok, and name the step.
+		step := strings.TrimPrefix(c.HookNotice, c.Name+": ")
+		return true, fmt.Sprintf("%s: MCP and hook in place — not checkable from outside: %s", c.Name, step)
+	}
 	return true, fmt.Sprintf("%s: ok — MCP and hook in %s", c.Name, c.MCPPath)
 }
 

@@ -157,6 +157,14 @@ func TestInstallOnlyRejectsAnUnknownCLI(t *testing.T) {
 	}
 }
 
+// mairc-dhe: doctor takes install's --only list; an unknown name is the same usage error, before anything is checked.
+func TestDoctorOnlyRejectsAnUnknownCLI(t *testing.T) {
+	code, _, errOut := runWith([]string{"doctor", "--only", "claude,vim"}, map[string]string{}, nil)
+	if code != 2 || !strings.HasPrefix(errOut, "usage: unknown CLI vim (supported: ") {
+		t.Fatalf("doctor --only claude,vim = %d, stderr %q", code, errOut)
+	}
+}
+
 // The yes/no question: only y or yes proceeds; anything else, end of input included, is no.
 func TestAskAcceptsOnlyYes(t *testing.T) {
 	for _, tc := range []struct {

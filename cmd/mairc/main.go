@@ -509,12 +509,23 @@ func runDoctor(args []string, getenv func(string) string, stdin io.Reader, stdou
 	live := fs.Bool("live", false, "")
 	assumeYes := fs.Bool("yes", false, "")
 	scope := fs.String("scope", "user", "")
+	only := fs.String("only", "", "")
 	if err := fs.Parse(args); err != nil || fs.NArg() > 0 {
-		_, _ = fmt.Fprintln(stderr, "usage: mairc doctor [--live] [--yes] [--scope user|project]")
+		_, _ = fmt.Fprintln(stderr, "usage: mairc doctor [--only cli,...] [--live] [--yes] [--scope user|project]")
 		return 2
 	}
 	if *scope != "user" && *scope != "project" {
 		_, _ = fmt.Fprintln(stderr, "usage: --scope must be user or project")
+		return 2
+	}
+	var onlyList []string
+	for _, name := range strings.Split(*only, ",") {
+		if name = strings.TrimSpace(name); name != "" {
+			onlyList = append(onlyList, name)
+		}
+	}
+	if msg := install.CheckNames(onlyList); msg != "" {
+		_, _ = fmt.Fprintln(stderr, msg)
 		return 2
 	}
 	p, err := config.ResolvePaths(getenv)
@@ -534,6 +545,7 @@ func runDoctor(args []string, getenv func(string) string, stdin io.Reader, stdou
 	self, _ := os.Executable()
 	statuses := install.Statuses(install.Options{
 		Binary: self, Scope: *scope, Home: home, Project: cwd, GOOS: runtime.GOOS, LookPath: exec.LookPath,
+		Only: onlyList,
 	})
 	base := "http://" + settings.Listen
 	probes := doctor.Probes{
