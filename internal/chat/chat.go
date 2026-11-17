@@ -220,9 +220,9 @@ func (s *Service) Send(ctx context.Context, from string, to []string, text strin
 	if err != nil {
 		return err
 	}
-	if _, err := s.store.Prune(ctx, now, set.KeepHours, set.KeepMessages); err != nil {
-		return err
-	}
+	// Pruning is housekeeping (the daemon also prunes every minute): a failure must not report a stored message as
+	// failed (a retry would duplicate it) nor skip the hook state below.
+	_, _ = s.store.Prune(ctx, now, set.KeepHours, set.KeepMessages)
 	s.mu.Lock()
 	if room {
 		if msg.ID > s.maxRoomID {
@@ -279,6 +279,14 @@ func (s *Service) Read(ctx context.Context, name string, n int) ([]core.Message,
 		n = set.MaxRoomLines
 	}
 	now := s.clock.Now()
+	// Clear the unread flag BEFORE taking the messages: a private message sent while the read runs sets it again, so
+	// the next hook delivers it. Clearing it afterwards would lose that message for the hook (a spurious true only
+	// costs one empty UnreadPMs).
+	s.mu.Lock()
+	if st := s.agents[name]; st != nil {
+		st.hasUnreadPM = false
+	}
+	s.mu.Unlock()
 	pms, err := s.store.UnreadPMs(ctx, name, now)
 	if err != nil {
 		return nil, err
@@ -293,9 +301,7 @@ func (s *Service) Read(ctx context.Context, name string, n int) ([]core.Message,
 		cursor = tail[len(tail)-1].ID
 		s.maxRoomID = cursor
 	}
-	st := s.agents[name]
-	if st != nil {
-		st.hasUnreadPM = false
+	if st := s.agents[name]; st != nil {
 		st.roomCursor = cursor
 	}
 	s.mu.Unlock()

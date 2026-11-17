@@ -45,6 +45,9 @@ type fakeStore struct {
 	pms      []core.Message
 	unread   map[string][]int64 // recipient -> undelivered pm ids, oldest first
 	pruneLog int
+	pruneErr error
+	// afterUnread runs once, after UnreadPMs has taken its messages and before it returns (a send racing a read).
+	afterUnread func()
 }
 
 func newFakeStore() *fakeStore {
@@ -154,7 +157,6 @@ func (f *fakeStore) InsertPM(_ context.Context, sender string, to []string, body
 func (f *fakeStore) UnreadPMs(_ context.Context, recipient string, _ time.Time) ([]core.Message, error) {
 	f.hit()
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	var out []core.Message
 	for _, id := range f.unread[recipient] {
 		for _, m := range f.pms {
@@ -164,6 +166,12 @@ func (f *fakeStore) UnreadPMs(_ context.Context, recipient string, _ time.Time) 
 		}
 	}
 	delete(f.unread, recipient)
+	hook := f.afterUnread
+	f.afterUnread = nil
+	f.mu.Unlock()
+	if hook != nil {
+		hook()
+	}
 	return out, nil
 }
 
@@ -222,8 +230,9 @@ func (f *fakeStore) Prune(context.Context, time.Time, int, int) (int, error) {
 	f.hit()
 	f.mu.Lock()
 	f.pruneLog++
+	err := f.pruneErr
 	f.mu.Unlock()
-	return 0, nil
+	return 0, err
 }
 
 func (f *fakeStore) Close() error { return nil }
@@ -440,6 +449,45 @@ func TestReadPrivateFirstThenRoomAndMovesCursor(t *testing.T) {
 	}
 	if _, err := s.Read(ctx, "", 1); !errors.Is(err, core.ErrNoName) {
 		t.Fatalf("no name: %v", err)
+	}
+}
+
+func TestReadDoesNotLoseAPrivateMessageSentDuringTheRead(t *testing.T) {
+	s, st, _ := setup(t, noCooldown(), "alice", "bob")
+	_, _ = s.HookEvent(ctx, "alice") // alice's hook state is in memory
+	if err := s.Send(ctx, "bob", []string{"alice"}, "first"); err != nil {
+		t.Fatal(err)
+	}
+	// A second message lands while Read is between taking the unread messages and finishing.
+	st.mu.Lock()
+	st.afterUnread = func() {
+		if err := s.Send(ctx, "bob", []string{"alice"}, "late"); err != nil {
+			t.Error(err)
+		}
+	}
+	st.mu.Unlock()
+	got, err := s.Read(ctx, "alice", 1)
+	if err != nil || len(got) == 0 || got[0].Body != "first" {
+		t.Fatalf("read %v %v", bodies(got), err)
+	}
+	got, _ = s.HookEvent(ctx, "alice")
+	if !slices.Equal(bodies(got), []string{"pm bob: late"}) {
+		t.Fatalf("the message sent during the read was not delivered by the next hook: %v", bodies(got))
+	}
+}
+
+func TestSendSucceedsAndUpdatesHookStateWhenPruneFails(t *testing.T) {
+	set := noCooldown()
+	set.CheckRoomEvery = 1
+	s, st, _ := setup(t, set, "alice", "bob")
+	_, _ = s.HookEvent(ctx, "alice")
+	st.pruneErr = errors.New("disk full")
+	if err := s.Send(ctx, "bob", nil, "kept"); err != nil {
+		t.Fatalf("a stored message must not be reported as failed: %v", err)
+	}
+	got, _ := s.HookEvent(ctx, "alice")
+	if !slices.Equal(bodies(got), []string{"room bob: kept"}) {
+		t.Fatalf("hook state not updated after a prune failure: %v", bodies(got))
 	}
 }
 
