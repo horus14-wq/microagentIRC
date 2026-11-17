@@ -11,6 +11,8 @@ was only read; every experiment ran under a throwaway HOME in `/data/tmp/proudli
 calls: one tiny headless prompt each for Claude Code and Devin; none for the others (no credentials on this host,
 or quota). These tools change fast: re-check before relying on a cell.
 
+Five more CLIs — Pi, Goose, Cursor CLI, GitHub Copilot CLI and Amp — are in [compat-untested.md](compat-untested.md): documentation only, **no binary exercised**, every row labelled UNTESTED.
+
 ## Summary
 
 | CLI | MCP config (path, key) | stdio | Streamable HTTP + headers | Hook mechanism + events | Hook stdout reaches model? | Seat id from a hook | Instruction file |
