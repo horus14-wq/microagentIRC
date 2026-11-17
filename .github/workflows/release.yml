@@ -100,9 +100,10 @@ jobs:
         shell: bash
         run: |
           name="mairc_${{ matrix.goos }}_${{ matrix.goarch }}"
-          gh release download "$GITHUB_REF_NAME" --pattern "${name}.${{ matrix.archive }}" --pattern SHA256SUMS --dir dl
+          gh release download "$GITHUB_REF_NAME" --repo "${{ github.repository }}" --pattern "${name}.${{ matrix.archive }}" --pattern SHA256SUMS --dir dl
           cd dl
-          grep "${name}" SHA256SUMS | shasum -a 256 -c -
+          grep "${name}" SHA256SUMS > expected.txt
+          shasum -a 256 -c expected.txt
           if [ "${{ matrix.archive }}" = "zip" ]; then
             unzip -q "${name}.zip" -d pkg
           else
