@@ -13,6 +13,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/horus14-wq/microagentIRC/internal/core"
+	"github.com/horus14-wq/microagentIRC/internal/names"
 )
 
 // whoLimit is the most names Who returns.
@@ -104,10 +105,6 @@ func clean(text string) string {
 	return strings.TrimSpace(b.String())
 }
 
-func normalize(name string) string {
-	return strings.ToLower(strings.TrimSpace(name))
-}
-
 // SetName binds a name to the seat. An empty want keeps the seat's name or generates a free one.
 func (s *Service) SetName(ctx context.Context, want, seat string) (string, error) {
 	now := s.clock.Now()
@@ -117,12 +114,15 @@ func (s *Service) SetName(ctx context.Context, want, seat string) (string, error
 		} else if ok {
 			return a.Name, nil
 		}
-		for attempt := range nameAttempts {
-			name := generateName(s.rnd, attempt >= nameAttempts/2)
-			if _, taken, err := s.store.Agent(ctx, name); err != nil {
+		taken := func(name string) (bool, error) {
+			_, ok, err := s.store.Agent(ctx, name)
+			return ok, err
+		}
+		// A name can be taken between the check and the bind; generate again then.
+		for range nameAttempts {
+			name, err := names.Generate(s.rnd, taken)
+			if err != nil {
 				return "", err
-			} else if taken {
-				continue
 			}
 			if err := s.store.UpsertAgent(ctx, name, seat, now); err != nil {
 				if errors.Is(err, core.ErrNameTaken) {
@@ -134,9 +134,9 @@ func (s *Service) SetName(ctx context.Context, want, seat string) (string, error
 		}
 		return "", core.ErrNameTaken
 	}
-	name := normalize(want)
-	if !validName(name) {
-		return "", core.ErrNameInvalid
+	name := names.Normalize(want)
+	if err := names.Check(name); err != nil {
+		return "", err
 	}
 	if err := s.store.UpsertAgent(ctx, name, seat, now); err != nil {
 		return "", err
@@ -181,7 +181,7 @@ func (s *Service) Send(ctx context.Context, from string, to []string, text strin
 	if !room {
 		seen := make(map[string]bool, len(to))
 		for _, raw := range to {
-			name := normalize(raw)
+			name := names.Normalize(raw)
 			if !seen[name] {
 				seen[name] = true
 				recipients = append(recipients, name)

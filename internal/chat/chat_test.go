@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/horus14-wq/microagentIRC/internal/core"
+	"github.com/horus14-wq/microagentIRC/internal/names"
 )
 
 // ---- fakes ----
@@ -383,7 +384,7 @@ func TestZeroCooldownNeverRefuses(t *testing.T) {
 func TestSetName(t *testing.T) {
 	s, st, _ := setup(t, noCooldown())
 	got, err := s.SetName(ctx, "", "seatA")
-	if err != nil || !validName(got) {
+	if err != nil || !names.Valid(got) {
 		t.Fatalf("generate: %q %v", got, err)
 	}
 	again, err := s.SetName(ctx, "", "seatA")
@@ -408,18 +409,6 @@ func TestSetName(t *testing.T) {
 	}
 	if name, err := s.SetName(ctx, "alice", "seatA"); err != nil || name != "alice" {
 		t.Fatalf("same name again: %q %v", name, err)
-	}
-}
-
-func TestValidName(t *testing.T) {
-	for name, want := range map[string]bool{
-		"ab": true, "greenfox1": true, "a-b_c": true, strings.Repeat("a", 24): true,
-		"a": false, strings.Repeat("a", 25): false, "1ab": false, "Ab": false, "a b": false,
-		"room": false, "all": false, "system": false, "irc": false,
-	} {
-		if validName(name) != want {
-			t.Errorf("validName(%q) != %v", name, want)
-		}
 	}
 }
 
