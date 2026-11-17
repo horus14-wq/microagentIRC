@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -79,7 +80,8 @@ func vectors(t *testing.T) map[string]vector {
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
 			continue
 		}
-		raw, err := os.ReadFile(filepath.Join(dir, entry.Name()))
+		// One directory, read through a scoped filesystem: the vector names come from that directory only.
+		raw, err := fs.ReadFile(os.DirFS(dir), entry.Name())
 		if err != nil {
 			t.Fatalf("read %s: %v", entry.Name(), err)
 		}

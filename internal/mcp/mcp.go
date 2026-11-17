@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"strconv"
 
 	"github.com/horus14-wq/microagentIRC/internal/core"
@@ -259,10 +260,9 @@ func writeString(b *bytes.Buffer, s string) {
 			b.WriteString(`\t`)
 		default:
 			if r < 0x20 {
-				b.WriteString(`\u00`)
-				const hex = "0123456789abcdef"
-				b.WriteByte(hex[byte(r)>>4])
-				b.WriteByte(hex[byte(r)&0xf])
+				// The only characters this branch sees are the 0x00-0x1f control codes, so the escape is four
+				// lower-case hex digits; formatting the rune keeps the conversion out of the code entirely.
+				fmt.Fprintf(b, `\u%04x`, r)
 				continue
 			}
 			b.WriteRune(r)
