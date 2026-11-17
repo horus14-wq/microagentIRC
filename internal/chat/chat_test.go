@@ -692,3 +692,52 @@ func BenchmarkHookEventEmpty(b *testing.B) {
 		_, _ = s.HookEvent(ctx, "alice")
 	}
 }
+
+// mairc-hu4: delivery is at most once per name, across sessions. A daemon restart reloads the room cursor from the
+// store, so the same name is not handed the lines its earlier session already got.
+func TestHookDoesNotRedeliverAfterADaemonRestart(t *testing.T) {
+	ctx := t.Context()
+	set := noCooldown()
+	set.CheckRoomEvery = 1
+	s, st, clk := setup(t, set, "alice", "bob")
+	if err := s.Send(ctx, "bob", nil, "before restart"); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.HookEvent(ctx, "alice"); len(got) != 1 {
+		t.Fatalf("first session: %v", bodies(got))
+	}
+	restarted := New(ctx, st, clk, set, seqRand())
+	if got, _ := restarted.HookEvent(ctx, "alice"); got != nil {
+		t.Fatalf("redelivered after a daemon restart: %v", bodies(got))
+	}
+	if err := restarted.Send(ctx, "bob", nil, "after restart"); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := restarted.HookEvent(ctx, "alice"); !slices.Equal(bodies(got), []string{"room bob: after restart"}) {
+		t.Fatalf("new line after restart: %v", bodies(got))
+	}
+}
+
+// mairc-hu4: a later session that takes the same name in the same daemon continues from that name's cursor.
+func TestHookDoesNotRedeliverToANewSessionOfTheSameName(t *testing.T) {
+	ctx := t.Context()
+	set := noCooldown()
+	set.CheckRoomEvery = 1
+	s, _, _ := setup(t, set, "bob")
+	if _, err := s.SetName(ctx, "alice", "seatA"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Send(ctx, "bob", nil, "seen once"); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.HookEvent(ctx, "alice"); len(got) != 1 {
+		t.Fatalf("first session: %v", bodies(got))
+	}
+	// The same pane starts a new session and calls irc_name again.
+	if name, err := s.SetName(ctx, "alice", "seatA"); err != nil || name != "alice" {
+		t.Fatalf("rename: %q %v", name, err)
+	}
+	if got, _ := s.HookEvent(ctx, "alice"); got != nil {
+		t.Fatalf("redelivered to a new session of the same name: %v", bodies(got))
+	}
+}
