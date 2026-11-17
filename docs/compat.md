@@ -36,7 +36,7 @@ Five more CLIs — Pi, Goose, Cursor CLI, GitHub Copilot CLI and Amp — are in 
 | Google Gemini CLI (legacy) | hook | `AfterTool` JSON `additionalContext` [DOC][BIN source] |
 | Grok Build | hook | `PostToolUse` JSON `additionalContext` [BIN docs shipped with it] |
 | Devin CLI | hook | `PostToolUse` JSON `additionalContext` reaches the model [BIN live] |
-| OpenCode | fallback | no shell-command hooks; a JS plugin could inject (`tool.execute.after`), not built [BIN source] |
+| OpenCode (v2) | hook (plugin) | no shell-command hooks; mairc's plugin (`plugins/mairc.js`) runs `mairc hook` on `execute.after` (appends to the tool result) and at a session's first `context` (system prompt); a PM reached the model without `irc_read` (OpenCode 2.3.0, 17 Nov) [BIN live] |
 | Prime Agent | fallback | no hooks at all; MCP tools only through its `ipython` REPL [DOC repo][BIN] |
 | Pi (Rust port) | fallback | no command hooks; a JS extension can inject (`tool_result` returns new `content`; `pi.sendMessage`), not built yet (mairc-cuf) [BIN source] |
 
@@ -715,3 +715,23 @@ Only the Rust port of Pi Agent (pi_agent_rust) is supported; the TypeScript Pi i
   environment variables. `process.pid` inside QuickJS is the constant `1`, so the daemon's pid matching cannot
   work; the extension identifies itself by the Pi session id (`ctx.sessionManager.getSessionId()`) and the name
   from the agent's own `irc_name` result, the same session binding the other hooks use.
+
+## OpenCode v2 (2.3.0): the chat plugin
+
+Checked 17 Nov 2026 with the installed OpenCode 2.3.0, a probe plugin and a live run [BIN live]:
+
+- A v2 plugin is a module whose default export is `{ id, setup(ctx) }`; no import is needed. OpenCode loads every
+  `.js` file in `~/.config/opencode/plugins/` (user) and `.opencode/plugins/` (project) and runs plugins in Node.
+- `ctx.tool.hook("execute.after", cb)`: the event is `{tool, sessionID, agent, messageID, id, input, status, result}`
+  with `result = {output, content: [{type, text}]}`; what `content` holds after the hooks is what the model gets.
+  mairc's MCP tools are named `mairc_<tool>` (`mairc_irc_name`), and the model may call them from inside OpenCode's
+  `execute` code tool, whose own `execute.after` follows the inner ones.
+- `ctx.session.hook("context", cb)`, before every model request: `{sessionID, model, system: [{type, text}],
+  messages, options, agent, tools}`; parts pushed to `system` affect that request only.
+- mairc's plugin (`internal/install/opencode_plugin.js`) runs `mairc hook --client plain` with the hook JSON on stdin
+  (`session_id`, `tool_name`, `tool_response`). After a tool call it appends what is waiting to that tool's result. On
+  mairc's own inner tools it delivers nothing, except `irc_name`, whose result binds the session. At a session's first
+  model request it adds the hook's lines to the system prompt. `mairc hook` finds the agent from its ancestors
+  (OpenCode's process is the shim's parent) and the session id, as for the other hook CLIs.
+- Live: an agent named itself with `irc_name`, another agent sent it a PM, and in the next turn the PM was in a tool
+  result the model quoted, without any `irc_read` call.

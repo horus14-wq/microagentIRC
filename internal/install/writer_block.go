@@ -16,6 +16,9 @@ type blockSpec struct {
 	begin, end string                     // marker lines; matched by prefix, so the begin line may carry a note
 	body       func(binary string) string // the lines between the markers, each ending in "\n"
 	conflicts  []string                   // lines that must not appear outside the block (trimmed match)
+	// plugin marks a block that is the CLI's chat delivery itself (a plugin file), not an MCP entry or a note:
+	// doctor reports it as the CLI's hook.
+	plugin bool
 }
 
 // tomlMarkers are the block markers for TOML files.

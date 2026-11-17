@@ -170,6 +170,10 @@ func cli(c install.Status, p Probes) (bool, string) {
 	if !c.HookPresent {
 		return false, fmt.Sprintf("%s: no mairc hook in %s — message delivery is off; run `mairc install --only %s`", c.Name, c.HookPath, c.Name)
 	}
+	if c.HookCommand == "" {
+		// A plugin runs `mairc hook` inside the CLI (OpenCode): there is no recorded command to run from here.
+		return true, fmt.Sprintf("%s: ok — MCP in %s, chat plugin in %s", c.Name, c.MCPPath, c.HookPath)
+	}
 	if p.Hook == nil {
 		return true, c.Name + ": MCP and hook ok (hook not run by this build)"
 	}

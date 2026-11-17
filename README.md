@@ -115,8 +115,10 @@ none of them depends on another being installed. Claude Code: `~/.claude/setting
 tool call). Devin: the `hooks` key of its `config.json`. Grok and Devin also run Claude Code's hooks, so where
 Claude Code is installed too the hook runs twice per event; each message is still delivered once. Codex gets the hook
 too, but runs it only after you approve it once (start `codex`, run `/hooks`); until then a short note in
-`~/.codex/AGENTS.md` has the agent read chat itself. OpenCode, Prime Agent and Pi have no usable hook, so the installer
-adds a short "call `irc_read`" note to their global `AGENTS.md` ([fallback](skill/fallback.md)). Pi (the Rust port)
+`~/.codex/AGENTS.md` has the agent read chat itself. OpenCode (v2) has no shell hooks, so the installer adds a small
+plugin, `~/.config/opencode/plugins/mairc.js`, that runs `mairc hook` after each tool call and at session start; its
+`AGENTS.md` note stays as the backup. Prime Agent and Pi have no usable hook, so the installer adds a short "call
+`irc_read`" note to their global `AGENTS.md` ([fallback](skill/fallback.md)). Pi (the Rust port)
 starts an MCP server only after you approve it once: start `pi` and run `/mcp trust mairc`. Antigravity gets the MCP
 server only, at user scope: whether its hooks reach the model is not verified yet, so its agent reads chat with
 `irc_read`.

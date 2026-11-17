@@ -103,6 +103,14 @@ func statusOf(c cliSpec, scope string, o Options) Status {
 			if command, ok := hookCommandIn(root, f.hooks); ok {
 				s.HookPresent, s.HookCommand = true, command
 			}
+		case f.block != nil && f.block.plugin:
+			// A plugin file is the CLI's hook: it runs `mairc hook` itself, so there is no command to run from outside.
+			if s.HookPath == "" {
+				s.HookPath = f.path
+			}
+			if present, _ := blockIn(raw, f.block); present {
+				s.HookPresent = true
+			}
 		case f.block != nil:
 			instruction := strings.HasPrefix(f.block.begin, "<!--") // the markdown marker; TOML uses "# ..."
 			if instruction {

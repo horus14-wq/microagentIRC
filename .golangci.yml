@@ -96,6 +96,10 @@ linters:
       - linters: [gosec]
         path: '^(cmd/mairc/|e2e/|internal/e2e/)'
         text: G204
+      # This test runs the OpenCode plugin under the node it finds on PATH, on purpose.
+      - linters: [gosec]
+        path: '^internal/install/opencode_plugin_unix_test\.go$'
+        text: G204
 
 issues:
   max-issues-per-linter: 0
