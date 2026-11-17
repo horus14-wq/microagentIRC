@@ -112,7 +112,7 @@ func run(ctx context.Context, o Options, logf func(format string, args ...any)) 
 		}
 		return err
 	}
-	st, err := store.Open(o.Paths.DB)
+	st, err := store.Open(ctx, o.Paths.DB)
 	if err != nil {
 		_ = ln.Close()
 		return err

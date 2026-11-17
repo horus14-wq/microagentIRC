@@ -50,9 +50,12 @@ func DefaultSettings() Settings {
 // Kind says where a message went.
 type Kind string
 
+// The two kinds of message.
 const (
+	// KindRoom is a message to the public room.
 	KindRoom Kind = "room"
-	KindPM   Kind = "pm"
+	// KindPM is a private message to one or more agents.
+	KindPM Kind = "pm"
 )
 
 // Message is one stored message. ID grows with time; Body is single-line, trimmed text.

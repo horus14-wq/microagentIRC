@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -15,11 +16,12 @@ import (
 // The store must satisfy the contract.
 var _ core.Store = (*Store)(nil)
 
-var t0 = time.UnixMilli(1_800_000_000_000)
+// start is the fixed instant every test counts from.
+func start() time.Time { return time.UnixMilli(1_800_000_000_000) }
 
-func memory(t *testing.T) *Store {
+func memory(ctx context.Context, t *testing.T) *Store {
 	t.Helper()
-	s, err := OpenMemory()
+	s, err := OpenMemory(ctx)
 	if err != nil {
 		t.Fatalf("OpenMemory: %v", err)
 	}
@@ -34,10 +36,10 @@ func must(t *testing.T, err error) {
 	}
 }
 
-func agents(t *testing.T, s *Store, names ...string) {
+func agents(ctx context.Context, t *testing.T, s *Store, names ...string) {
 	t.Helper()
 	for _, name := range names {
-		must(t, s.UpsertAgent(context.Background(), name, "", t0))
+		must(t, s.UpsertAgent(ctx, name, "", start()))
 	}
 }
 
@@ -49,20 +51,11 @@ func bodies(msgs []core.Message) []string {
 	return out
 }
 
-func equal(a, b []string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
-}
+func equal(a, b []string) bool { return slices.Equal(a, b) }
 
 func TestUpsertAgent(t *testing.T) {
 	ctx := context.Background()
+	t0 := start()
 	later := t0.Add(time.Minute)
 	tests := []struct {
 		name     string
@@ -124,7 +117,7 @@ func TestUpsertAgent(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			s := memory(t)
+			s := memory(ctx, t)
 			err := tc.steps(s)
 			if !errors.Is(err, tc.wantErr) {
 				t.Fatalf("error = %v, want %v", err, tc.wantErr)
@@ -142,7 +135,8 @@ func TestUpsertAgent(t *testing.T) {
 
 func TestAgentLookupsAndTimes(t *testing.T) {
 	ctx := context.Background()
-	s := memory(t)
+	t0 := start()
+	s := memory(ctx, t)
 	if _, ok, err := s.Agent(ctx, "nobody"); err != nil || ok {
 		t.Fatalf("missing agent: ok=%v err=%v", ok, err)
 	}
@@ -195,8 +189,9 @@ func TestAgentLookupsAndTimes(t *testing.T) {
 
 func TestPrivateMessagesAreDeliveredOnce(t *testing.T) {
 	ctx := context.Background()
-	s := memory(t)
-	agents(t, s, "fox", "dog", "cat", "owl")
+	t0 := start()
+	s := memory(ctx, t)
+	agents(ctx, t, s, "fox", "dog", "cat", "owl")
 
 	m, err := s.InsertPM(ctx, "fox", []string{"dog", "cat", "dog", "owl"}, "meet at noon", t0)
 	must(t, err)
@@ -249,12 +244,13 @@ func TestPrivateMessagesAreDeliveredOnce(t *testing.T) {
 
 func TestRoomReads(t *testing.T) {
 	ctx := context.Background()
-	s := memory(t)
-	agents(t, s, "fox", "dog")
+	t0 := start()
+	s := memory(ctx, t)
+	agents(ctx, t, s, "fox", "dog")
 	if id, err := s.MaxRoomID(ctx); err != nil || id != 0 {
 		t.Fatalf("empty room: id=%d err=%v", id, err)
 	}
-	var ids []int64
+	ids := make([]int64, 0, 6)
 	for i := range 6 {
 		sender := "fox"
 		if i%2 == 1 {
@@ -298,9 +294,10 @@ func TestRoomReads(t *testing.T) {
 
 func TestPrune(t *testing.T) {
 	ctx := context.Background()
+	t0 := start()
 	fill := func(t *testing.T, s *Store) {
 		t.Helper()
-		agents(t, s, "fox", "dog")
+		agents(ctx, t, s, "fox", "dog")
 		for i := range 10 {
 			when := t0.Add(time.Duration(i) * time.Hour)
 			if i%2 == 0 {
@@ -333,7 +330,7 @@ func TestPrune(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			s := memory(t)
+			s := memory(ctx, t)
 			fill(t, s)
 			deleted, err := s.Prune(ctx, tc.now, tc.keepHours, tc.keepMessages)
 			must(t, err)
@@ -352,9 +349,10 @@ func TestPrune(t *testing.T) {
 
 func TestFileBackedStoreKeepsItsData(t *testing.T) {
 	ctx := context.Background()
+	t0 := start()
 	// A path with characters that mean something in a URI.
 	path := filepath.Join(t.TempDir(), "odd name #1 100%?.db")
-	s, err := Open(path)
+	s, err := Open(ctx, path)
 	must(t, err)
 	must(t, s.UpsertAgent(ctx, "fox", "cwd:/work", t0))
 	_, err = s.InsertRoom(ctx, "fox", "still here", t0)
@@ -372,7 +370,7 @@ func TestFileBackedStoreKeepsItsData(t *testing.T) {
 	must(t, s.Close())
 
 	// Opening again applies the schema a second time, harmlessly, and finds the data.
-	s, err = Open(path)
+	s, err = Open(ctx, path)
 	must(t, err)
 	defer func() { _ = s.Close() }()
 	a, ok, err := s.AgentBySeat(ctx, "cwd:/work")
@@ -386,13 +384,14 @@ func TestFileBackedStoreKeepsItsData(t *testing.T) {
 
 func TestConcurrentUse(t *testing.T) {
 	ctx := context.Background()
-	s := memory(t)
+	t0 := start()
+	s := memory(ctx, t)
 	const workers, each = 8, 25
 	names := make([]string, workers)
 	for i := range names {
 		names[i] = fmt.Sprintf("agent%d", i)
 	}
-	agents(t, s, names...)
+	agents(ctx, t, s, names...)
 
 	var wg sync.WaitGroup
 	errs := make(chan error, workers*each*4)
@@ -485,7 +484,8 @@ func TestParseQueries(t *testing.T) {
 
 func BenchmarkInsertRoom(b *testing.B) {
 	ctx := context.Background()
-	s, err := Open(filepath.Join(b.TempDir(), "bench.db"))
+	t0 := start()
+	s, err := Open(ctx, filepath.Join(b.TempDir(), "bench.db"))
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -503,7 +503,8 @@ func BenchmarkInsertRoom(b *testing.B) {
 
 func BenchmarkHasUnreadPM(b *testing.B) {
 	ctx := context.Background()
-	s, err := Open(filepath.Join(b.TempDir(), "bench.db"))
+	t0 := start()
+	s, err := Open(ctx, filepath.Join(b.TempDir(), "bench.db"))
 	if err != nil {
 		b.Fatal(err)
 	}

@@ -34,19 +34,19 @@ type Store struct {
 }
 
 // Open opens the database file, creating it if needed, applies the schema and prepares every statement.
-func Open(path string) (*Store, error) {
+func Open(ctx context.Context, path string) (*Store, error) {
 	// The path goes into a URI: only the characters that would end or alter it are escaped.
 	escaped := strings.NewReplacer("%", "%25", "?", "%3f", "#", "%23").Replace(path)
-	return open("file:" + escaped + "?_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)" +
+	return open(ctx, "file:"+escaped+"?_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)"+
 		"&_pragma=foreign_keys(ON)&_pragma=busy_timeout(2000)")
 }
 
 // OpenMemory opens a private in-memory database, for tests.
-func OpenMemory() (*Store, error) {
-	return open("file::memory:?_pragma=foreign_keys(ON)")
+func OpenMemory(ctx context.Context) (*Store, error) {
+	return open(ctx, "file::memory:?_pragma=foreign_keys(ON)")
 }
 
-func open(dsn string) (*Store, error) {
+func open(ctx context.Context, dsn string) (*Store, error) {
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open database: %w", err)
@@ -55,7 +55,6 @@ func open(dsn string) (*Store, error) {
 	db.SetMaxOpenConns(1)
 	db.SetMaxIdleConns(1)
 	db.SetConnMaxLifetime(0)
-	ctx := context.Background()
 	if _, err := db.ExecContext(ctx, schemaSQL); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("apply schema: %w", err)
@@ -67,7 +66,7 @@ func open(dsn string) (*Store, error) {
 	}
 	s := &Store{db: db, stmts: make(map[string]*sql.Stmt, len(queries))}
 	for name, text := range queries {
-		stmt, err := db.PrepareContext(ctx, text)
+		stmt, err := db.PrepareContext(ctx, text) //nolint:sqlclosecheck // kept for the store's lifetime; Close closes it
 		if err != nil {
 			_ = s.Close()
 			return nil, fmt.Errorf("prepare %s: %w", name, err)
@@ -143,9 +142,11 @@ func (s *Store) inTx(ctx context.Context, fn func(tx *sql.Tx) error) error {
 	return tx.Commit()
 }
 
-// on returns the named statement bound to the transaction.
-func (s *Store) on(ctx context.Context, tx *sql.Tx, name string) *sql.Stmt {
-	return tx.StmtContext(ctx, s.stmts[name])
+// exec runs the named statement inside the transaction.
+func (s *Store) exec(ctx context.Context, tx *sql.Tx, name string, args ...any) (sql.Result, error) {
+	stmt := tx.StmtContext(ctx, s.stmts[name])
+	defer func() { _ = stmt.Close() }()
+	return stmt.ExecContext(ctx, args...)
 }
 
 func ms(t time.Time) int64 {
@@ -166,7 +167,9 @@ func at(ms int64) time.Time {
 func (s *Store) UpsertAgent(ctx context.Context, name, seat string, now time.Time) error {
 	return s.inTx(ctx, func(tx *sql.Tx) error {
 		var current sql.NullString
-		err := s.on(ctx, tx, "AgentSeat").QueryRowContext(ctx, name).Scan(&current)
+		seatOf := tx.StmtContext(ctx, s.stmts["AgentSeat"])
+		defer func() { _ = seatOf.Close() }()
+		err := seatOf.QueryRowContext(ctx, name).Scan(&current)
 		exists := err == nil
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return err
@@ -176,15 +179,15 @@ func (s *Store) UpsertAgent(ctx context.Context, name, seat string, now time.Tim
 		}
 		if seat != "" {
 			// A seat has one name: taking a name in a seat releases the seat's previous name.
-			if _, err := s.on(ctx, tx, "ReleaseSeat").ExecContext(ctx, seat, name); err != nil {
+			if _, err := s.exec(ctx, tx, "ReleaseSeat", seat, name); err != nil {
 				return err
 			}
 		}
 		if !exists {
-			_, err = s.on(ctx, tx, "InsertAgent").ExecContext(ctx, name, seat, ms(now))
+			_, err = s.exec(ctx, tx, "InsertAgent", name, seat, ms(now))
 			return err
 		}
-		_, err = s.on(ctx, tx, "UpdateAgent").ExecContext(ctx, ms(now), seat, name)
+		_, err = s.exec(ctx, tx, "UpdateAgent", ms(now), seat, name)
 		return err
 	})
 }
@@ -275,7 +278,7 @@ func (s *Store) insert(
 ) (core.Message, error) {
 	m := core.Message{At: now, Sender: sender, Kind: kind, Body: body}
 	err := s.inTx(ctx, func(tx *sql.Tx) error {
-		res, err := s.on(ctx, tx, "InsertMessage").ExecContext(ctx, ms(now), sender, string(kind), body)
+		res, err := s.exec(ctx, tx, "InsertMessage", ms(now), sender, string(kind), body)
 		if err != nil {
 			return err
 		}
@@ -285,15 +288,14 @@ func (s *Store) insert(
 		sent := "SetLastPublic"
 		if kind == core.KindPM {
 			sent = "SetLastPrivate"
-			deliver := s.on(ctx, tx, "InsertDelivery")
 			for _, recipient := range recipients {
 				// INSERT OR IGNORE: a recipient named twice gets one row.
-				if _, err := deliver.ExecContext(ctx, m.ID, recipient); err != nil {
+				if _, err := s.exec(ctx, tx, "InsertDelivery", m.ID, recipient); err != nil {
 					return err
 				}
 			}
 		}
-		_, err = s.on(ctx, tx, sent).ExecContext(ctx, ms(now), sender)
+		_, err = s.exec(ctx, tx, sent, ms(now), sender)
 		return err
 	})
 	if err != nil {
@@ -302,8 +304,8 @@ func (s *Store) insert(
 	return m, nil
 }
 
+// scanMessages reads every row. The caller closes rows.
 func scanMessages(rows *sql.Rows) ([]core.Message, error) {
-	defer func() { _ = rows.Close() }()
 	var out []core.Message
 	for rows.Next() {
 		var (
@@ -321,22 +323,30 @@ func scanMessages(rows *sql.Rows) ([]core.Message, error) {
 	return out, rows.Err()
 }
 
+// unread reads the recipient's undelivered private messages inside the transaction.
+func (s *Store) unread(ctx context.Context, tx *sql.Tx, recipient string) ([]core.Message, error) {
+	stmt := tx.StmtContext(ctx, s.stmts["UnreadPMs"])
+	defer func() { _ = stmt.Close() }()
+	rows, err := stmt.QueryContext(ctx, recipient)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	return scanMessages(rows)
+}
+
 // UnreadPMs returns the recipient's undelivered private messages, oldest first, and marks them delivered, in one
 // transaction, so two readers never both get a message (core.Store).
 func (s *Store) UnreadPMs(ctx context.Context, recipient string, now time.Time) ([]core.Message, error) {
 	var out []core.Message
 	err := s.inTx(ctx, func(tx *sql.Tx) error {
-		rows, err := s.on(ctx, tx, "UnreadPMs").QueryContext(ctx, recipient)
-		if err != nil {
+		var err error
+		// The rows are read and closed inside unread, before the update: the one connection cannot run a
+		// statement while rows are open.
+		if out, err = s.unread(ctx, tx, recipient); err != nil || len(out) == 0 {
 			return err
 		}
-		if out, err = scanMessages(rows); err != nil {
-			return err
-		}
-		if len(out) == 0 {
-			return nil
-		}
-		_, err = s.on(ctx, tx, "MarkDelivered").ExecContext(ctx, ms(now), recipient)
+		_, err = s.exec(ctx, tx, "MarkDelivered", ms(now), recipient)
 		return err
 	})
 	if err != nil {
@@ -358,6 +368,7 @@ func (s *Store) RoomTail(ctx context.Context, limit int) ([]core.Message, error)
 	if err != nil {
 		return nil, err
 	}
+	defer func() { _ = rows.Close() }()
 	return scanMessages(rows)
 }
 
@@ -368,6 +379,7 @@ func (s *Store) RoomSince(ctx context.Context, after int64, exclude string, limi
 	if err != nil {
 		return nil, err
 	}
+	defer func() { _ = rows.Close() }()
 	return scanMessages(rows)
 }
 
@@ -390,7 +402,7 @@ func (s *Store) Prune(ctx context.Context, now time.Time, keepHours, keepMessage
 	var deleted int64
 	err := s.inTx(ctx, func(tx *sql.Tx) error {
 		cutoff := now.Add(-time.Duration(keepHours) * time.Hour)
-		byAge, err := s.on(ctx, tx, "PruneByAge").ExecContext(ctx, ms(cutoff))
+		byAge, err := s.exec(ctx, tx, "PruneByAge", ms(cutoff))
 		if err != nil {
 			return err
 		}
@@ -399,7 +411,7 @@ func (s *Store) Prune(ctx context.Context, now time.Time, keepHours, keepMessage
 			return err
 		}
 		// The keepMessages-th newest message sits at offset keepMessages-1; everything below it goes.
-		byCount, err := s.on(ctx, tx, "PruneByCount").ExecContext(ctx, max(keepMessages, 1)-1)
+		byCount, err := s.exec(ctx, tx, "PruneByCount", max(keepMessages, 1)-1)
 		if err != nil {
 			return err
 		}

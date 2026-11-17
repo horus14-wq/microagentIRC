@@ -77,7 +77,7 @@ func newFixture(t testing.TB, settings core.Settings) *fixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	st, err := store.Open(paths.DB)
+	st, err := store.Open(t.Context(), paths.DB)
 	if err != nil {
 		t.Fatal(err)
 	}
