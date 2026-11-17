@@ -63,8 +63,6 @@ func (f *fakeChat) Who(context.Context) ([]string, error) {
 func (f *fakeChat) HookEvent(context.Context, string) ([]core.Message, error) { return nil, nil }
 func (f *fakeChat) Reload(core.Settings)                                      {}
 
-var ctx = context.Background()
-
 func tool(t *testing.T, chat core.Chat, name string) core.Tool {
 	t.Helper()
 	for _, tl := range All(chat) {
@@ -98,17 +96,19 @@ func TestToolsVerbatimAndOrdered(t *testing.T) {
 }
 
 // chatErrors are the chat-layer texts every tool passes through unchanged.
-var chatErrors = []error{
-	core.ErrNoName, core.ErrEmpty, core.ErrPMOff, core.ErrRoomOff, core.ErrTooManyRecipients,
-	core.ErrNameInvalid, core.ErrNameTaken,
-	fmt.Errorf("%w", errors.New("cooldown 42s")), errors.New("too long 300/256"), errors.New("unknown: bob,carol"),
+func chatErrors() []error {
+	return []error{
+		core.ErrNoName, core.ErrEmpty, core.ErrPMOff, core.ErrRoomOff, core.ErrTooManyRecipients,
+		core.ErrNameInvalid, core.ErrNameTaken,
+		fmt.Errorf("%w", errors.New("cooldown 42s")), errors.New("too long 300/256"), errors.New("unknown: bob,carol"),
+	}
 }
 
 func TestErrorsPassThroughVerbatim(t *testing.T) {
 	for _, name := range []string{"irc_name", "irc_send", "irc_read", "irc_who"} {
-		for _, e := range chatErrors {
+		for _, e := range chatErrors() {
 			s := &core.Session{Name: "alice", Seat: "s1"}
-			res := tool(t, &fakeChat{err: e}, name).Call(ctx, s, []byte(`{"text":"hi"}`))
+			res := tool(t, &fakeChat{err: e}, name).Call(t.Context(), s, []byte(`{"text":"hi"}`))
 			if !res.IsError || res.Text != e.Error() {
 				t.Errorf("%s with %q: %+v", name, e, res)
 			}
@@ -132,7 +132,7 @@ func TestBadArguments(t *testing.T) {
 	}
 	for _, c := range cases {
 		f := &fakeChat{}
-		res := tool(t, f, c.tool).Call(ctx, &core.Session{Name: "alice"}, []byte(c.args))
+		res := tool(t, f, c.tool).Call(t.Context(), &core.Session{Name: "alice"}, []byte(c.args))
 		if !res.IsError || res.Text != "bad arguments" {
 			t.Errorf("%s %s: %+v", c.tool, c.args, res)
 		}
@@ -144,7 +144,7 @@ func TestBadArguments(t *testing.T) {
 
 func TestEmptyAndNullArgsMeanEmptyObjectAndUnknownFieldsAreIgnored(t *testing.T) {
 	for _, args := range []string{"", "null", " ", `{"extra":1}`} {
-		res := tool(t, &fakeChat{who: []string{"a"}}, "irc_who").Call(ctx, &core.Session{}, []byte(args))
+		res := tool(t, &fakeChat{who: []string{"a"}}, "irc_who").Call(t.Context(), &core.Session{}, []byte(args))
 		if res.IsError || res.Text != "a" {
 			t.Errorf("irc_who %q: %+v", args, res)
 		}
@@ -154,17 +154,17 @@ func TestEmptyAndNullArgsMeanEmptyObjectAndUnknownFieldsAreIgnored(t *testing.T)
 func TestIrcName(t *testing.T) {
 	f := &fakeChat{name: "greenfox1"}
 	s := &core.Session{Seat: "seatA"}
-	res := tool(t, f, "irc_name").Call(ctx, s, nil)
+	res := tool(t, f, "irc_name").Call(t.Context(), s, nil)
 	if res.IsError || res.Text != "you are greenfox1" || s.Name != "greenfox1" || f.gotWant != "" || f.gotSeat != "seatA" {
 		t.Fatalf("generate: %+v %+v %+v", res, s, f)
 	}
 	f.name = "alice"
-	res = tool(t, f, "irc_name").Call(ctx, s, []byte(`{"name":"Alice"}`))
+	res = tool(t, f, "irc_name").Call(t.Context(), s, []byte(`{"name":"Alice"}`))
 	if res.Text != "you are alice" || s.Name != "alice" || f.gotWant != "Alice" {
 		t.Fatalf("set: %+v %+v", res, s)
 	}
 	f.err = core.ErrNameTaken
-	res = tool(t, f, "irc_name").Call(ctx, s, []byte(`{"name":"bob"}`))
+	res = tool(t, f, "irc_name").Call(t.Context(), s, []byte(`{"name":"bob"}`))
 	if !res.IsError || res.Text != "name taken" || s.Name != "alice" {
 		t.Fatalf("failed rename changed the session: %+v %+v", res, s)
 	}
@@ -185,13 +185,13 @@ func TestIrcSendRecipients(t *testing.T) {
 	for _, c := range cases {
 		f := &fakeChat{}
 		args, _ := json.Marshal(map[string]string{"text": "hi", "to": c.to})
-		res := tool(t, f, "irc_send").Call(ctx, &core.Session{Name: "alice"}, args)
+		res := tool(t, f, "irc_send").Call(t.Context(), &core.Session{Name: "alice"}, args)
 		if res.IsError || res.Text != "sent" || !slices.Equal(f.gotTo, c.want) || f.gotFrom != "alice" || f.gotText != "hi" {
 			t.Errorf("to %q: %+v to=%q", c.to, res, f.gotTo)
 		}
 	}
 	f := &fakeChat{}
-	tool(t, f, "irc_send").Call(ctx, &core.Session{Name: "alice"}, []byte(`{"text":"hi"}`))
+	tool(t, f, "irc_send").Call(t.Context(), &core.Session{Name: "alice"}, []byte(`{"text":"hi"}`))
 	if f.gotTo != nil {
 		t.Errorf("no to: %q", f.gotTo)
 	}
@@ -201,7 +201,7 @@ func TestIrcSendRecipients(t *testing.T) {
 // (mairc-hd5). "nothing new" measured 2 tokens in o200k_base and cl100k_base (docs/compat.md, "Idle read reply");
 // the standard library has no tokenizer, so the test pins the exact text and a byte and word bound around it.
 func TestIdleReadReplyIsTwoTokens(t *testing.T) {
-	res := tool(t, &fakeChat{}, "irc_read").Call(ctx, &core.Session{Name: "alice"}, nil)
+	res := tool(t, &fakeChat{}, "irc_read").Call(t.Context(), &core.Session{Name: "alice"}, nil)
 	if res.IsError || res.Text != "nothing new" {
 		t.Fatalf("idle reply %+v", res)
 	}
@@ -222,22 +222,22 @@ func TestIrcReadFormatting(t *testing.T) {
 		{ID: 9, At: at, Sender: "greenfox1", Kind: core.KindPM, Body: "hello"},
 		{ID: 3, At: at, Sender: "reddog7", Kind: core.KindRoom, Body: "hello"},
 	}}
-	res := tool(t, f, "irc_read").Call(ctx, &core.Session{Name: "alice"}, []byte(`{"n":5}`))
+	res := tool(t, f, "irc_read").Call(t.Context(), &core.Session{Name: "alice"}, []byte(`{"n":5}`))
 	if res.IsError || res.Text != "pm greenfox1: hello\nroom reddog7: hello" || f.gotN != 5 || f.gotFrom != "alice" {
 		t.Fatalf("%+v n=%d", res, f.gotN)
 	}
-	res = tool(t, &fakeChat{}, "irc_read").Call(ctx, &core.Session{Name: "alice"}, nil)
+	res = tool(t, &fakeChat{}, "irc_read").Call(t.Context(), &core.Session{Name: "alice"}, nil)
 	if res.IsError || res.Text != "nothing new" {
 		t.Fatalf("empty: %+v", res)
 	}
 }
 
 func TestIrcWho(t *testing.T) {
-	res := tool(t, &fakeChat{who: []string{"greenfox1", "reddog7"}}, "irc_who").Call(ctx, &core.Session{}, nil)
+	res := tool(t, &fakeChat{who: []string{"greenfox1", "reddog7"}}, "irc_who").Call(t.Context(), &core.Session{}, nil)
 	if res.IsError || res.Text != "greenfox1 reddog7" {
 		t.Fatalf("%+v", res)
 	}
-	res = tool(t, &fakeChat{}, "irc_who").Call(ctx, &core.Session{}, nil)
+	res = tool(t, &fakeChat{}, "irc_who").Call(t.Context(), &core.Session{}, nil)
 	if res.IsError || res.Text != "nobody yet" {
 		t.Fatalf("empty: %+v", res)
 	}
@@ -246,7 +246,7 @@ func TestIrcWho(t *testing.T) {
 func TestResultsAreBareText(t *testing.T) {
 	f := &fakeChat{name: "a", who: []string{"a"}, msgs: []core.Message{{Kind: core.KindRoom, Sender: "a", Body: "b"}}}
 	for _, tl := range All(f) {
-		res := tl.Call(ctx, &core.Session{Name: "a"}, []byte(`{"text":"x"}`))
+		res := tl.Call(t.Context(), &core.Session{Name: "a"}, []byte(`{"text":"x"}`))
 		if res.Text == "" || res.Text[len(res.Text)-1] == '\n' || res.Text[0] == '{' || res.Text[0] == '#' {
 			t.Errorf("%s: %q", tl.Name, res.Text)
 		}
@@ -283,14 +283,14 @@ func TestToolsListSizeAndGolden(t *testing.T) {
 	}
 	path := filepath.Join("..", "..", "testdata", "vectors", "tools", "tools-list.json")
 	if os.Getenv("MAIRC_UPDATE_GOLDEN") == "1" {
-		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(path, got, 0o644); err != nil {
+		if err := os.WriteFile(path, got, 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
-	want, err := os.ReadFile(path)
+	want, err := os.ReadFile(filepath.Clean(path))
 	if err != nil {
 		t.Fatal(err)
 	}
