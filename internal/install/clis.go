@@ -23,6 +23,7 @@ type fileSpec struct {
 	server *entrySpec // JSON: the MCP server entry, or nil
 	hooks  *hookSpec  // JSON: Claude-style hook entries, or nil
 	block  *blockSpec // block: mairc's marked block
+	notice string     // one line printed after install changed this file (a step only the user can do)
 }
 
 // An entrySpec is one named entry inside an object reached by keyPath, e.g. mcpServers.mairc.
@@ -73,8 +74,12 @@ func tomlServerBlock() *blockSpec {
 }
 
 // codex is OpenAI Codex CLI (docs/compat.md, "OpenAI Codex CLI", 0.169.0): MCP servers in ~/.codex/config.toml (or
-// <project>/.codex/config.toml, read only in trusted projects), table [mcp_servers.<name>] with command/args. MCP
-// only: Codex runs a hook only after the user trusts its exact hash in /hooks, which an installer cannot do.
+// <project>/.codex/config.toml, read only in trusted projects), table [mcp_servers.<name>] with command/args.
+// Hooks: ~/.codex/hooks.json (or <project>/.codex/hooks.json) in Claude Code's format; plain stdout reaches the model
+// on SessionStart/UserPromptSubmit and JSON additionalContext on PostToolUse, which is exactly what
+// `mairc hook --client claude` prints. Codex runs a hook only after the user trusts its exact hash in /hooks, which an
+// installer cannot do: install says so in one line, and until then (or if never approved) the fallback note in the
+// global ~/.codex/AGENTS.md has the agent read chat itself, and tells it to rely on the hook once lines arrive.
 func codex() cliSpec {
 	return cliSpec{
 		name:     "codex",
@@ -85,9 +90,20 @@ func codex() cliSpec {
 			if scope == "project" {
 				base = o.Project
 			}
-			return []fileSpec{{
-				path: filepath.Join(base, ".codex", "config.toml"), format: "block", block: tomlServerBlock(),
-			}}
+			files := []fileSpec{
+				{path: filepath.Join(base, ".codex", "config.toml"), format: "block", block: tomlServerBlock()},
+				{
+					path: filepath.Join(base, ".codex", "hooks.json"), format: "json",
+					hooks: &hookSpec{
+						keyPath: []string{"hooks"}, events: hookEvents(), handler: hookHandler, ours: isOurHook,
+					},
+					notice: "codex: approve the mairc hook once: start codex and run /hooks",
+				},
+			}
+			if scope == "user" {
+				files = append(files, instructionFile(filepath.Join(o.Home, ".codex", "AGENTS.md"), codexFallback))
+			}
+			return files
 		},
 	}
 }
@@ -201,6 +217,10 @@ const (
 	openCodeFallback = "## Chat (mairc)\n" +
 		"Call `irc_read` once at the start of each task and once after each batch of tool calls. Never call it in a loop\n" +
 		"or twice in a row. `nothing new` means there is nothing to do; carry on with your task.\n"
+	codexFallback = "## Chat (mairc)\n" +
+		"Call `irc_read` once at the start of each task. If chat lines starting `irc:` then reach you by themselves,\n" +
+		"rely on them; otherwise call `irc_read` once after each batch of tool calls. Never call it in a loop or twice\n" +
+		"in a row. `nothing new` means there is nothing to do; carry on with your task.\n"
 	primeAgentFallback = "## Chat (mairc)\n" +
 		"Read chat with `print(mcp.call_tool(\"mairc\", \"irc_read\", {}))` once at the start of each task and once after each\n" +
 		"batch of tool calls. Never in a loop or twice in a row. `nothing new` means there is nothing to do.\n" +

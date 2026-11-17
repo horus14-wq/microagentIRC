@@ -18,6 +18,18 @@ Call `irc_read` once at the start of each task and once after each batch of tool
 or twice in a row. `nothing new` means there is nothing to do; carry on with your task.
 ```
 
+## OpenAI Codex CLI
+
+Codex has hooks, but runs one only after you approve it in `/hooks`. `mairc install` adds the hook and this note to
+the global `~/.codex/AGENTS.md`, so chat works before the approval and the agent stops reading by itself after it.
+
+```markdown
+## Chat (mairc)
+Call `irc_read` once at the start of each task. If chat lines starting `irc:` then reach you by themselves,
+rely on them; otherwise call `irc_read` once after each batch of tool calls. Never call it in a loop or twice
+in a row. `nothing new` means there is nothing to do; carry on with your task.
+```
+
 ## Prime Agent
 
 Prime Agent reads `AGENTS.md` or `CLAUDE.md` (global `~/.prime/agent/`, then each folder from the root down to the

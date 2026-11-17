@@ -135,6 +135,9 @@ func Run(o Options) int {
 				return 1
 			}
 			_, _ = fmt.Fprintf(out, "updated %s\n", f.path)
+			if f.spec.notice != "" && !o.Uninstall {
+				_, _ = fmt.Fprintln(out, f.spec.notice)
+			}
 		}
 	}
 	if len(changed) == 0 && !o.Uninstall {
@@ -240,11 +243,13 @@ type target struct {
 	out     []byte // the file as it will be written
 	existed bool
 	mode    fs.FileMode
+	dest    string // where the bytes are written: path with symlinks resolved (dotfile managers link configs)
 }
 
 // load reads the file. A missing file is empty (an empty object for JSON); a JSON file that is not a JSON object is
 // errNotJSON. Text formats are kept as bytes: their writer never re-encodes the user's content.
 func (t *target) load() error {
+	t.dest = t.path
 	info, err := os.Stat(t.path)
 	if errors.Is(err, fs.ErrNotExist) {
 		t.mode = 0o600
@@ -271,6 +276,12 @@ func (t *target) load() error {
 		t.root = root
 	}
 	t.raw, t.existed, t.mode = raw, true, info.Mode().Perm()
+	// A symlinked config is changed where it lives: renaming over the link would replace it with a plain file.
+	resolved, err := filepath.EvalSymlinks(t.path)
+	if err != nil {
+		return err
+	}
+	t.dest = resolved
 	return nil
 }
 
@@ -296,20 +307,25 @@ func (t *target) apply(binary string, uninstall bool) (edited bool, problem stri
 }
 
 // store keeps a one-time backup of the original content, then writes atomically: a temporary file in the same
-// directory, the original mode (0600 for a new file), and a rename over the target.
+// directory, the original mode (0600 for a new file), and a rename over the target. A symlinked file is written at
+// its resolved destination (dest), so the link stays a link.
 func (t *target) store() error {
-	dir := filepath.Dir(t.path)
+	dest := t.dest
+	if dest == "" {
+		dest = t.path
+	}
+	dir := filepath.Dir(dest)
 	if !t.existed {
 		if err := os.MkdirAll(dir, 0o700); err != nil {
 			return err
 		}
 	}
 	if t.existed {
-		if err := backup(t.path+".mairc.bak", t.raw, t.mode); err != nil {
+		if err := backup(dest+".mairc.bak", t.raw, t.mode); err != nil {
 			return err
 		}
 	}
-	tmp, err := os.CreateTemp(dir, "."+filepath.Base(t.path)+".mairc-*")
+	tmp, err := os.CreateTemp(dir, "."+filepath.Base(dest)+".mairc-*")
 	if err != nil {
 		return err
 	}
@@ -325,7 +341,7 @@ func (t *target) store() error {
 		werr = cerr
 	}
 	if werr == nil {
-		werr = os.Rename(tmpName, t.path)
+		werr = os.Rename(tmpName, dest)
 	}
 	if werr != nil {
 		_ = os.Remove(tmpName)

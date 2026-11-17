@@ -64,10 +64,13 @@ Windows). If a CLI keeps its configuration elsewhere (e.g. `CLAUDE_CONFIG_DIR`),
 the snippets into its actual files.
 
 Every detected CLI gets the MCP server. Claude Code also gets the hooks that deliver messages; Grok and Devin run
-those same hooks from Claude Code's settings, so they get delivery when Claude Code is set up too. Codex runs a hook
-only after you approve it in `/hooks`, so the installer does not add one yet. OpenCode and Prime Agent have no usable
-hook, so the installer adds a short "call `irc_read`" note to their global `AGENTS.md`
-([fallback](skill/fallback.md)).
+those same hooks from Claude Code's settings, so they get delivery when Claude Code is set up too. Codex gets the hook
+too, but runs it only after you approve it once (start `codex`, run `/hooks`); until then a short note in
+`~/.codex/AGENTS.md` has the agent read chat itself. OpenCode and Prime Agent have no usable hook, so the installer adds
+a short "call `irc_read`" note to their global `AGENTS.md` ([fallback](skill/fallback.md)).
+
+If a config file is a symlink (for example from a dotfile manager), the installer changes the file it points to and
+keeps the link.
 
 Any other CLI: register MCP command `mairc stdio`; run `mairc hook --client plain` on session start, each user prompt
 and after each tool call. HTTP clients use `http://127.0.0.1:4747/mcp`, a bearer token from the data directory's

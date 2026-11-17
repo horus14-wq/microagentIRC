@@ -319,7 +319,9 @@ func TestTOMLRowsWriteTheBlock(t *testing.T) {
 // The fallback snippets the installer writes are the ones skill/fallback.md documents, verbatim.
 func TestFallbackSnippetsMatchSkill(t *testing.T) {
 	skill := string(read(t, filepath.Join("..", "..", "skill", "fallback.md")))
-	for name, snippet := range map[string]string{"opencode": openCodeFallback, "prime-agent": primeAgentFallback} {
+	for name, snippet := range map[string]string{
+		"opencode": openCodeFallback, "prime-agent": primeAgentFallback, "codex": codexFallback,
+	} {
 		if !strings.Contains(skill, "```markdown\n"+snippet+"```") {
 			t.Fatalf("the %s snippet is not in skill/fallback.md verbatim:\n%s", name, snippet)
 		}
@@ -391,5 +393,68 @@ func TestAntigravityRow(t *testing.T) {
 	code, out := runRaw(Options{Binary: testBinary, Scope: "project", Home: home, Project: t.TempDir(), Only: []string{"agy"}})
 	if code != 0 || !strings.HasPrefix(out, "agy: no project-scope configuration, skipped\n") {
 		t.Fatalf("project scope = %d, %q", code, out)
+	}
+}
+
+// Codex gets both delivery paths: the hook (Claude Code's format, the same bytes the Claude row writes into an empty
+// settings.json) with one line telling the user to approve it, and the self-limiting irc_read note in its global
+// AGENTS.md for until then. The approval line appears only when the hook file changed; uninstall removes all three.
+func TestCodexGetsTheHookTheApprovalLineAndTheNote(t *testing.T) {
+	home := t.TempDir()
+	o := Options{Binary: testBinary, Home: home, Only: []string{"codex"}}
+	code, out := runRaw(o)
+	if code != 0 || strings.Count(out, "codex: approve the mairc hook once: start codex and run /hooks\n") != 1 {
+		t.Fatalf("install = %d, %q", code, out)
+	}
+	claudeHome := t.TempDir()
+	runRaw(Options{Binary: testBinary, Home: claudeHome, Only: []string{"claude"}})
+	hooks := filepath.Join(home, ".codex", "hooks.json")
+	if got, want := string(read(t, hooks)), string(read(t, filepath.Join(claudeHome, ".claude", "settings.json"))); got != want {
+		t.Fatalf("hooks.json:\n%s\nwant the Claude hook entries:\n%s", got, want)
+	}
+	if got := string(read(t, filepath.Join(home, ".codex", "AGENTS.md"))); !strings.Contains(got, codexFallback) {
+		t.Fatalf("AGENTS.md:\n%s", got)
+	}
+	if code, out := runRaw(o); code != 0 || out != "already installed\n" {
+		t.Fatalf("second install = %d, %q (no approval line when nothing changed)", code, out)
+	}
+	o.Uninstall = true
+	if code, out := runRaw(o); code != 0 || strings.Contains(out, "approve") {
+		t.Fatalf("uninstall = %d, %q", code, out)
+	}
+	if got := string(read(t, hooks)); strings.Contains(got, "mairc") {
+		t.Fatalf("hooks.json after uninstall:\n%s", got)
+	}
+	project := t.TempDir()
+	runRaw(Options{Binary: testBinary, Scope: "project", Home: t.TempDir(), Project: project, Only: []string{"codex"}})
+	if _, err := os.Stat(filepath.Join(project, ".codex", "hooks.json")); err != nil {
+		t.Fatalf("project scope hooks.json: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(project, ".codex", "AGENTS.md")); err == nil {
+		t.Fatal("project scope wrote an AGENTS.md")
+	}
+}
+
+// A config that is a symlink (dotfile managers; Devin's global AGENTS.md links to Codex's on some machines) is changed
+// where it lives: the link stays a link, the target gains mairc's entry, the backup sits next to the target.
+func TestSymlinkedConfigStaysALink(t *testing.T) {
+	home, store := t.TempDir(), t.TempDir()
+	target := filepath.Join(store, "claude.json")
+	write(t, target, "{\n  \"keep\": 1\n}\n", 0o600)
+	link := filepath.Join(home, ".claude.json")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+	if code, out := runRaw(Options{Binary: testBinary, Home: home, Only: []string{"claude"}}); code != 0 {
+		t.Fatalf("install = %d, %q", code, out)
+	}
+	if info, err := os.Lstat(link); err != nil || info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("the link was replaced: %v %v", info, err)
+	}
+	if got := string(read(t, target)); !strings.Contains(got, testBinary) || !strings.HasPrefix(got, "{\n  \"keep\": 1,\n") {
+		t.Fatalf("target:\n%s", got)
+	}
+	if got := string(read(t, target+".mairc.bak")); got != "{\n  \"keep\": 1\n}\n" {
+		t.Fatalf("backup next to the target = %q", got)
 	}
 }
