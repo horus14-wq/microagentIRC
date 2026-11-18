@@ -38,7 +38,7 @@ Five more CLIs — Pi, Goose, Cursor CLI, GitHub Copilot CLI and Amp — are in 
 | Devin CLI | hook | `PostToolUse` JSON `additionalContext` reaches the model [BIN live] |
 | OpenCode (v2) | hook (plugin) | no shell-command hooks; mairc's plugin (`plugins/mairc.js`) runs `mairc hook` on `execute.after` (appends to the tool result) and at a session's first `context` (system prompt); a PM reached the model without `irc_read` (OpenCode 2.3.0, 17 Nov) [BIN live] |
 | Prime Agent | bridge | no hooks at all; MCP tools only through its `ipython` REPL [DOC repo][BIN]. The daemon delivers itself: the shim finds the agent id on its parent (the REPL kernel, whose `PRIME_AGENT_KERNEL_OWNER_PID` is its own parent, the worker) and reports `prime-agent:<id>`; every 5 s the daemon takes what is due for each named such session, as a hook event would, and runs `prime-agent send --follow-up <id> <lines>` (mairc-byd) [BIN; unit-tested, not yet run live] |
-| Pi (Rust port) | hook (extension) | no command hooks; mairc's extension (`~/.pi/agent/extensions/mairc.js`) runs `mairc hook --session <pi session id>` through `pi.exec` on `tool_result` (returns the content with the lines appended) and on `session_start` (`pi.sendMessage`, next turn). `pi.exec` needs the extension policy to allow `exec` (permissive, the default for fresh installs; denied in `safe` and `balanced`, where the AGENTS.md note remains). Pi 0.8.0 loaded it and ran the hook with its session id; delivery to a model not yet seen live (no working provider on the test host) (mairc-cuf) [BIN partial live] |
+| Pi — Rust port 0.8.0 and TypeScript pi-mono 1.5.2 [BIN] | hook (extension) | no command hooks on either; the same mairc extension (`~/.pi/agent/extensions/mairc.js`) runs `mairc hook --session <pi session id>` through `pi.exec` on `tool_result` (returns the content with the lines appended, `structuredContent` passed through for the TypeScript Pi) and on `session_start` (`pi.sendMessage`, next turn). `pi.exec` needs the extension policy to allow `exec` on the Rust port (permissive, the default for fresh installs; denied in `safe` and `balanced`, where the AGENTS.md note remains). Rust 0.8.0 loaded it and ran the hook with its session id; TS 1.5.2 loaded the same file under `pi --mode rpc` and spawned `mairc hook` and `mairc stdio` (strace); delivery to a model not yet seen live on either (no working provider on the test host) (mairc-cuf, mairc-chat-t64) [BIN partial live] |
 
 A fallback CLI gets the instruction snippet in `skill/fallback.md`: call `irc_read` at the start of each task and
 after each batch of tool calls, never in a loop.
@@ -710,33 +710,45 @@ WebFetch https://github.com/PrimeIntellect-ai/prime-agent ; https://docs.primein
 No model call made; no config written; no `send` issued to the live agents.
 ```
 
-## Pi (Rust port, pi 0.8.0)
+## Pi — Rust port 0.8.0 and TypeScript pi-mono 1.5.2
 
-Only the Rust port of Pi Agent (pi_agent_rust) is supported; the TypeScript Pi is not. Facts from the installed binary
-(`pi --help`, `pi --explain-extension-policy`) and the pi_agent_rust source at commit 2b4aca22 (16 Nov 2026), read
-17 Nov 2026 [BIN][BIN source]:
+Two different programs ship as `pi` and share `~/.pi/agent`: the TypeScript original (`@earendil-works/pi-coding-agent`,
+pi-mono; `pi --version` prints a bare semver — 1.5.2 on the test install) and the Rust port (`pi_agent_rust`;
+`pi --version` prints `pi <semver> (...)` — 0.8.0 here). `mairc install` probes `pi --version` to tell them apart
+(bare semver → TypeScript; `pi ` prefix or anything unrecognized → Rust port) because the only difference is the
+step only the user can take: the Rust port spawns no MCP server until `/mcp trust mairc` (a pending server's tools
+answer `[MCP_TRUST_PENDING]`); the TypeScript one connects a global server without a trust step, and a project
+server once the workspace is trusted (`/trust` saves the decision in `~/.pi/agent/trust.json`; `--approve` decides
+for one run). Rust-port facts from its source at commit 2b4aca22 (16 Nov 2026) and binary, read 17 Nov 2026;
+TypeScript facts from its docs (docs.pi.dev) and installed package, read 18 Nov 2026 [BIN][DOC][BIN source]:
 
-- **MCP.** Precedence: `--mcp-config`, `.pi/mcp.json` (project; trusted workspaces only), `.agents/mcp.json`,
-  `~/.pi/agent/mcp.json` (global), then other CLIs' files (`.claude/mcp.json`, `.codex/config.toml`, ...) and
-  `mcp.json` / `.mcp.json` (src/mcp/config.rs). Key `mcpServers`; stdio `command`/`args`/`env`/`cwd`. MCP tools are
-  native model tools.
-- **MCP trust.** A configured server never spawns until the user acknowledges it with `/mcp trust <name>`; the
-  decision binds to the server's fingerprint, so a changed command re-pends it; a pending server's tool answers
-  `[MCP_TRUST_PENDING]` (src/mcp/trust.rs). `mairc install` prints that step. Servers start on use, not at startup:
-  `pi --mode rpc` without a prompt started no `mairc stdio`.
+- **MCP.** `~/.pi/agent/mcp.json` (global) or `<project>/.pi/mcp.json`, key `mcpServers` -> `{command, args}`.
+  The Rust port's precedence: `--mcp-config`, `.pi/mcp.json` (project; trusted workspaces only), `.agents/mcp.json`,
+  `~/.pi/agent/mcp.json` (global), then other CLIs' files and `mcp.json`/`.mcp.json` (src/mcp/config.rs); the
+  TypeScript one documents the same files plus `pi mcp add|list|remove`. MCP tools are native model tools.
 - **Context files.** `AGENTS.md`, else `CLAUDE.md`, in `~/.pi/agent`, then each folder from the root down to the
-  working directory (src/app.rs `load_project_context_files`).
-- **Hooks.** No command hooks. Extensions are JS/TS run in embedded QuickJS, auto-loaded from
-  `~/.pi/agent/extensions/` (project `.pi/extensions/` only with `--trust`). Events include `session_start`,
-  `context` (before each provider call; can change messages), `tool_result` (after a tool runs; a handler that
-  returns `{content}` replaces the result's content), `turn_end`, `agent_end`. `pi.sendMessage({customType, content,
-  display}, {deliverAs: "steer" | "followUp" | "nextTurn", triggerTurn})` adds a message to the model context.
-- **What an extension may do.** Default profile on this host: permissive. In the strict `safe` profile `read`,
-  `write`, `http`, `events` and `session` are allowed and `exec` and `env` are denied, so a delivery extension must
-  call the daemon over HTTP (loopback scores lower risk than public) and must not run `mairc hook` or read
-  environment variables. `process.pid` inside QuickJS is the constant `1`, so the daemon's pid matching cannot
-  work; the extension identifies itself by the Pi session id (`ctx.sessionManager.getSessionId()`) and the name
-  from the agent's own `irc_name` result, the same session binding the other hooks use.
+  working directory (Rust: src/app.rs `load_project_context_files`; TS: same documented discovery).
+- **Hooks.** No command hooks on either. Extensions are JS/TS auto-loaded from `~/.pi/agent/extensions/` (project
+  `.pi/extensions/` only behind trust). Events include `session_start` and `tool_result` (a handler returning a
+  partial patch can replace `content`); `pi.exec(command, args, {timeout, ...})` runs a program and resolves
+  `{code, stdout, stderr}`; `pi.sendMessage({customType, content, display}, {deliverAs: "nextTurn"})` queues a
+  message. The Rust port mirrors the TypeScript extension API (its docs call it a port of it).
+- **The shared extension** (`internal/install/pi_extension.js`) runs `mairc hook --client plain --event
+  <SessionStart|PostToolUse> --session <pi session id>` through `pi.exec` (3 s timeout), appends what is waiting to
+  the tool result's content, and queues session-start lines for the next turn. On the TypeScript Pi a `tool_result`
+  patch that replaces `content` without returning `structuredContent` drops it (its types warn; tools with an
+  `outputSchema` carry it), so the extension passes `event.structuredContent` through — a no-op on the Rust port,
+  which ignores the field. Nothing waiting, a failing hook or a denied `exec` adds nothing and never throws.
+- **Policy.** Rust port: default extension profile on this host is permissive; `exec` is denied in `safe` and
+  `balanced`, where the AGENTS.md note remains, and `process.pid` inside its QuickJS is the constant `1`, so the
+  daemon's pid matching cannot work — the extension identifies itself by the Pi session id
+  (`ctx.sessionManager.getSessionId()`) and the name from the agent's own `irc_name` result. TypeScript Pi: `pi.exec`
+  runs with the user's permissions; project trust (`~/.pi/agent/trust.json`, `/trust`, `--approve`) gates which
+  `.pi/` resources load — the global `~/.pi/agent` files need no decision.
+- **Verified.** Rust 0.8.0 loaded the extension and ran the hook with its session id (mairc-cuf); delivery to a
+  model not yet seen live (no working provider on the test host). TypeScript 1.5.2 loaded the same file under
+  `pi --mode rpc` and spawned both `mairc hook --client plain --event SessionStart --session <id>` and `mairc
+  stdio` (strace, 18 Nov 2026); provider-backed delivery not yet seen live (no API key on the test host).
 
 ## OpenCode v2 (2.3.0): the chat plugin
 

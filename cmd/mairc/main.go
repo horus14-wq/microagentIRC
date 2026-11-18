@@ -385,6 +385,7 @@ func runInstall(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		Binary: binary, Scope: *scope, Home: home, Project: cwd,
 		Print: *printOnly, Uninstall: *uninstall, Out: stdout,
 		Only: onlyList, DryRun: *dryRun, Confirm: confirm, LookPath: exec.LookPath, GOOS: runtime.GOOS,
+		Exec:          probeExec,
 		PrepareBinary: prepare,
 	})
 	if code == 0 && *uninstall && !*dryRun && !*printOnly && len(onlyList) == 0 {
@@ -576,6 +577,7 @@ func runDoctor(args []string, getenv func(string) string, stdin io.Reader, stdou
 	self, _ := os.Executable()
 	statuses := install.Statuses(install.Options{
 		Binary: self, Scope: *scope, Home: home, Project: cwd, GOOS: runtime.GOOS, LookPath: exec.LookPath,
+		Exec: probeExec,
 		Only: onlyList,
 	})
 	base := "http://" + settings.Listen
@@ -676,6 +678,15 @@ func runHookCommand(command string) (string, error) {
 
 // hookCommandTimeout bounds one hook run; the hook's own budget is a few seconds.
 const hookCommandTimeout = 15 * time.Second
+
+// probeExec runs a CLI binary for install's variant probes (install.Options.Exec), bounded so a hung binary
+// cannot stall install.
+func probeExec(name string, args ...string) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, name, args...).CombinedOutput()
+	return string(out), err
+}
 
 // liveRun runs a CLI once, headless, and reports whether the daemon saw the MCP session that run opened.
 func liveRun(base, token, cli string) (bool, error) {

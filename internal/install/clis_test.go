@@ -646,6 +646,71 @@ func TestPiInstallNamesTheTrustStep(t *testing.T) {
 	}
 }
 
+// mairc-chat-t64: the TypeScript Pi (pi-mono, @earendil-works/pi-coding-agent) shares ~/.pi/agent and the same
+// mcpServers shape, but connects a global server with no trust step — install must not tell its users to run a
+// /mcp trust command it does not have, while still writing the same three files.
+func TestPiInstallOmitsTrustStepForTypeScriptPi(t *testing.T) {
+	home := t.TempDir()
+	o := Options{
+		Binary: testBinary, Home: home, Only: []string{"pi"},
+		LookPath: func(string) (string, error) { return "/fake/pi", nil },
+		Exec:     func(string, ...string) (string, error) { return "1.5.2\n", nil },
+	}
+	code, out := runRaw(o)
+	if code != 0 {
+		t.Fatalf("install --only pi = %d:\n%s", code, out)
+	}
+	if strings.Contains(out, "/mcp trust") {
+		t.Fatalf("TypeScript Pi install printed the Rust port's trust step:\n%s", out)
+	}
+	var mcp map[string]any
+	if err := json.Unmarshal(read(t, filepath.Join(home, ".pi", "agent", "mcp.json")), &mcp); err != nil {
+		t.Fatal(err)
+	}
+	servers, _ := mcp["mcpServers"].(map[string]any)
+	if _, ok := servers["mairc"]; !ok {
+		t.Fatalf("mcp.json = %v", mcp)
+	}
+	if got := read(t, filepath.Join(home, ".pi", "agent", "extensions", "mairc.js")); len(got) == 0 {
+		t.Fatal("extensions/mairc.js was not written")
+	}
+	if got := read(t, filepath.Join(home, ".pi", "agent", "AGENTS.md")); !strings.Contains(string(got), "mairc") {
+		t.Fatalf("AGENTS.md = %q", got)
+	}
+}
+
+// piVariant reads `pi --version`: the Rust port prints "pi <semver> (...)" and the TypeScript one a bare semver;
+// anything unprobeable or unrecognized stays on the Rust port's notices, whose missing trust step breaks silently.
+func TestPiVariant(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		out  string
+		err  error
+		want string
+	}{
+		{"rust port", "pi 0.8.0 (unknown 2026-10-13T18:40:08Z)\n", nil, "rust"},
+		{"typescript", "1.5.2\n", nil, "ts"},
+		{"typescript prerelease", "1.5.2-rc.1\n", nil, "ts"},
+		{"not a version", "pi agent\n", nil, "rust"},
+		{"partial version", "1.5\n", nil, "rust"},
+		{"probe failed", "", errors.New("exit status 1"), "rust"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			o := Options{
+				LookPath: func(string) (string, error) { return "/fake/pi", nil },
+				Exec:     func(string, ...string) (string, error) { return tc.out, tc.err },
+			}
+			if got := piVariant(o); got != tc.want {
+				t.Fatalf("piVariant(%q) = %q, want %q", tc.out, got, tc.want)
+			}
+		})
+	}
+	// No probe hooks at all: detection by config directory only still gets the safe default.
+	if got := piVariant(Options{}); got != "rust" {
+		t.Fatalf("piVariant(no exec) = %q", got)
+	}
+}
+
 // mairc-cpm: an install made before OpenCode v2 left mairc's entry at mcp.mairc. Install moves it to mcp.servers.mairc
 // and keeps the user's own servers; a legacy "mairc" entry that runs something else is the user's and stays; a second
 // run changes nothing; uninstall removes mairc's entry and leaves the user's.

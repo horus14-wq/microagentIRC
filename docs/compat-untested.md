@@ -42,7 +42,7 @@ Legend as in [compat.md](compat.md): **[DOC]** official documentation, **[BIN]**
 **[UNV]** unverified, with the reason. Everything in this file is UNTESTED in the mairc sense: no mairc code was run
 against any of these CLIs.
 
-## Pi — superseded: the Rust port is supported, see compat.md "Pi (Rust port)"; this section described the TypeScript Pi, which is not supported
+## Pi — superseded: both Pi Agents are supported, see compat.md "Pi — Rust port 0.8.0 and TypeScript pi-mono 1.5.2"; this section described the TypeScript Pi before that support landed
 
 Sources (read 2026-11-17): <https://docs.pi.dev/latest/mcp> (MCP Servers), <https://docs.pi.dev/latest/extensions>
 (Extensions), <https://docs.pi.dev/latest/cli> (CLI reference), <https://pi.dev/docs> (the docs index;

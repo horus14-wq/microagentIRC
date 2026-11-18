@@ -56,25 +56,36 @@ func clis() []cliSpec {
 	return []cliSpec{claudeCode(), codex(), grok(), devin(), openCode(), primeAgent(), antigravity(), pi()}
 }
 
-// pi is the Rust port of Pi Agent (pi_agent_rust; the TypeScript Pi is not supported). Checked against its source and
-// the installed binary (docs/compat.md, "Pi"): MCP servers in ~/.pi/agent/mcp.json (global) or <project>/.pi/mcp.json
-// (read only in a trusted workspace), key mcpServers -> {command, args}; context files AGENTS.md (else CLAUDE.md) in
-// ~/.pi/agent, then each folder from the root down to the working directory. Pi has no command hooks, so at user
-// scope the fallback snippet goes into ~/.pi/agent/AGENTS.md. Pi never spawns an MCP server the user has not
-// acknowledged (src/mcp/trust.rs: `/mcp trust <name>`, bound to the server's command; until then its tools answer
-// [MCP_TRUST_PENDING]), which an installer cannot do: install says so in one line.
+// pi covers both Pi Agents: they share ~/.pi/agent (mcp.json in the same mcpServers shape, the same extensions
+// directory whose API the Rust port mirrors, AGENTS.md as the fallback). Checked against the Rust port's source and
+// binary and the TypeScript one's docs and binary 1.5.2 (docs/compat.md, "Pi"): MCP servers in
+// ~/.pi/agent/mcp.json (global) or <project>/.pi/mcp.json (read only in a trusted workspace), key mcpServers ->
+// {command, args}; context files AGENTS.md (else CLAUDE.md) in ~/.pi/agent, then each folder from the root down to
+// the working directory. Neither has command hooks, so at user scope the fallback snippet goes into
+// ~/.pi/agent/AGENTS.md. The two differ in the steps only the user can take, which the notices name per variant
+// (piVariant): the Rust port spawns no MCP server the user has not acknowledged (/mcp trust <name>, bound to the
+// server's command; until then its tools answer [MCP_TRUST_PENDING]), which an installer cannot do; the
+// TypeScript one connects a global server without a trust step, and a project server once the workspace is trusted
+// (/trust). Project servers on the Rust port load only in a workspace started once with pi --trust.
 func pi() cliSpec {
-	const trust = "pi: approve the mairc MCP server once: start pi and run /mcp trust mairc"
 	return cliSpec{
 		name:     "pi",
 		binaries: []string{"pi"},
 		dirs:     []string{filepath.Join(".pi", "agent")},
 		files: func(scope string, o Options) []fileSpec {
+			trust := ""
+			projectTrust := ""
+			if piVariant(o) == "rust" {
+				trust = "pi: approve the mairc MCP server once: start pi and run /mcp trust mairc"
+				projectTrust = " (project servers load only in a workspace started once with pi --trust)"
+			} else {
+				projectTrust = "pi: project servers load only in a trusted workspace: start pi in it and run /trust"
+			}
 			if scope == "project" {
 				return []fileSpec{{
 					path: filepath.Join(o.Project, ".pi", "mcp.json"), format: "json",
 					server: &entrySpec{keyPath: []string{"mcpServers"}, name: "mairc", value: stdioServer},
-					notice: trust + " (project servers load only in a workspace started once with pi --trust)",
+					notice: trust + projectTrust,
 				}}
 			}
 			return []fileSpec{
@@ -84,12 +95,54 @@ func pi() cliSpec {
 					notice: trust,
 				},
 				// Pi has no command hooks; it loads every extension in ~/.pi/agent/extensions/, and this one runs
-				// `mairc hook` after each tool call and at session start (mairc-cuf).
+				// `mairc hook` after each tool call and at session start (mairc-cuf). The same file serves both Pi
+				// Agents: the Rust port mirrors the TypeScript extension API.
 				{path: filepath.Join(o.Home, ".pi", "agent", "extensions", "mairc.js"), format: "block", block: piExtension()},
 				instructionFile(filepath.Join(o.Home, ".pi", "agent", "AGENTS.md"), openCodeFallback),
 			}
 		},
 	}
+}
+
+// piVariant reports which Pi Agent the pi binary is: "rust" for the Rust port (pi_agent_rust) and "ts" for the
+// TypeScript original (pi-mono). `pi --version` prints "pi <semver> (...)" on the Rust port and a bare "<semver>"
+// on the TypeScript one (checked 18 Nov 2026: "pi 0.8.0 (unknown ...)" vs "1.5.2"). Anything that cannot be probed,
+// or prints anything else, is treated as the Rust port: its trust step is the one whose absence breaks silently.
+func piVariant(o Options) string {
+	if o.Exec == nil || o.LookPath == nil {
+		return "rust"
+	}
+	path, err := o.LookPath("pi")
+	if err != nil {
+		return "rust"
+	}
+	out, err := o.Exec(path, "--version")
+	if err != nil {
+		return "rust"
+	}
+	v := strings.TrimSpace(out)
+	if strings.HasPrefix(v, "pi ") {
+		return "rust"
+	}
+	parts := strings.SplitN(v, ".", 3)
+	if len(parts) == 3 && isDigits(parts[0]) && isDigits(parts[1]) && len(parts[2]) > 0 &&
+		parts[2][0] >= '0' && parts[2][0] <= '9' {
+		// A bare "<semver>" (a suffix like "2-rc.1" is fine) is the TypeScript Pi.
+		return "ts"
+	}
+	return "rust"
+}
+
+func isDigits(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i := range len(s) {
+		if s[i] < '0' || s[i] > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 // antigravity is Antigravity CLI (agy 1.5.x; checked on this host 17 Nov 2026: "agy mcp add" in an empty HOME writes

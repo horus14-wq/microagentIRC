@@ -44,6 +44,7 @@ func TestPiExtensionDeliversWhatTheHookPrints(t *testing.T) {
 		Handlers           []string
 		Delivered, Nothing []string
 		Failed             []string
+		Structured         map[string]any
 		Messages           []struct{ Content, DeliverAs string }
 	}
 	if err := json.Unmarshal(raw, &got); err != nil {
@@ -58,12 +59,15 @@ func TestPiExtensionDeliversWhatTheHookPrints(t *testing.T) {
 	if got.Nothing != nil || got.Failed != nil {
 		t.Errorf("nothing waiting / failing hook changed the result: %q %q", got.Nothing, got.Failed)
 	}
+	if got.Structured["kept"] != float64(1) {
+		t.Errorf("structuredContent was not passed through: %v", got.Structured)
+	}
 	if len(got.Messages) != 1 || got.Messages[0].Content != "irc:\npm alice: lost" || got.Messages[0].DeliverAs != "nextTurn" {
 		t.Errorf("session start messages %+v", got.Messages)
 	}
 	runs := strings.Split(strings.TrimSpace(string(read(t, calls))), "\n")
-	if len(runs) != 4 || runs[0] != "hook --client plain --event PostToolUse --session pi-session-1" ||
-		runs[3] != "hook --client plain --event SessionStart --session pi-session-1" {
+	if len(runs) != 5 || runs[0] != "hook --client plain --event PostToolUse --session pi-session-1" ||
+		runs[4] != "hook --client plain --event SessionStart --session pi-session-1" {
 		t.Errorf("hook runs:\n%s", strings.Join(runs, "\n"))
 	}
 }

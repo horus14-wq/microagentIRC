@@ -40,6 +40,8 @@ type Options struct {
 	Confirm func(files []string) bool
 	// LookPath finds a CLI's binary for detection (exec.LookPath in production); nil detects by config directory only.
 	LookPath func(file string) (string, error)
+	// Exec runs a CLI's binary for a probe such as `pi --version` (returns combined output); nil skips probes.
+	Exec func(name string, args ...string) (string, error)
 	// GOOS selects per-OS configuration paths (runtime.GOOS in production; "" means linux rules).
 	GOOS string
 	// PrepareBinary, when non-nil, runs once after the selection validates and before any file is

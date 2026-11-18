@@ -29,6 +29,11 @@ const result = async () => {
 
 writeFileSync(outFile, "irc:\npm alice: hi");
 report.delivered = await result();
+// The TypeScript Pi drops structuredContent when a patch replaces content without returning it; the extension
+// must pass it through (the Rust port ignores the field).
+const patched = await handlers.tool_result(
+  { content: [{ type: "text", text: "tool output" }], structuredContent: { kept: 1 } }, ctx);
+report.structured = patched && patched.structuredContent;
 rmSync(outFile);
 report.nothing = await result();
 writeFileSync(failFile, "");
