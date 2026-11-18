@@ -18,6 +18,12 @@ func detach(cmd *exec.Cmd) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 }
 
+// startDetached starts the daemon command; there is no job-object equivalent to fall back from.
+func startDetached(newCmd func() *exec.Cmd) (*exec.Cmd, error) {
+	cmd := newCmd()
+	return cmd, cmd.Start()
+}
+
 // stableBinaryPath is where `mairc install` copies a binary that sits in a temporary or Downloads
 // directory: the user's bin directory, on PATH for the usual shells.
 func stableBinaryPath(home string) string {

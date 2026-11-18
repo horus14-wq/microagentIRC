@@ -94,6 +94,7 @@ func fileLogger(w io.Writer, clock core.Clock) func(format string, args ...any) 
 }
 
 func run(ctx context.Context, o Options, logf func(format string, args ...any)) error {
+	removeStalePIDFile(o.Paths.PID, logf)
 	settings, err := config.Load(o.Paths.Config)
 	if err != nil {
 		return err

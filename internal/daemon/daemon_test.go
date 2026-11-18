@@ -7,8 +7,10 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"regexp"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -153,5 +155,76 @@ func TestRun(t *testing.T) {
 	}
 	if _, err := (&net.Dialer{}).DialContext(t.Context(), "tcp", addr); err == nil {
 		t.Fatal("still listening after stop")
+	}
+}
+
+// deadPID runs a process that exits at once and returns its pid, which no live process holds afterwards.
+func deadPID(t *testing.T) int {
+	t.Helper()
+	cmd := exec.CommandContext(t.Context(), os.Args[0], "-test.run=^$") // #nosec G204 G702 -- the test binary itself, matching no test
+	if err := cmd.Run(); err != nil {
+		t.Skipf("cannot spawn a helper process: %v", err)
+	}
+	return cmd.Process.Pid
+}
+
+// mairc-vq8: a daemon killed outright leaves daemon.pid naming a dead process. The next daemon removes the stale
+// file on start (and says so in the log); a file naming a live process — including this test's own — is left for
+// the pid write that follows.
+func TestStalePIDFileIsRemovedOnStart(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		content func(t *testing.T) string
+		wantLog string
+	}{
+		{"dead pid", func(t *testing.T) string { return strconv.Itoa(deadPID(t)) + "\n" }, "removed stale daemon.pid (pid "},
+		{"garbage", func(*testing.T) string { return "not a pid\n" }, "removed stale daemon.pid"},
+		{"live pid", func(*testing.T) string { return strconv.Itoa(os.Getpid()) + "\n" }, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			paths, err := config.ResolvePaths(func(key string) string {
+				if key == "MAIRC_HOME" {
+					return home
+				}
+				return ""
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			addr := freeAddr(t)
+			if err := os.WriteFile(paths.Config, []byte(`{"listen":"`+addr+`"}`), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(paths.PID, []byte(tc.content(t)), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			lines, done := startRun(ctx, paths)
+			var got []string
+			for line := range lines {
+				got = append(got, line)
+				if line == "start test "+addr {
+					break
+				}
+			}
+			stale := false
+			for _, line := range got {
+				if strings.HasPrefix(line, "removed stale daemon.pid") {
+					stale = true
+					if tc.wantLog != "" && !strings.HasPrefix(line, tc.wantLog) {
+						t.Fatalf("stale line %q, want prefix %q", line, tc.wantLog)
+					}
+				}
+			}
+			if stale != (tc.wantLog != "") {
+				t.Fatalf("log lines %q: stale removal = %v, want %v", got, stale, tc.wantLog != "")
+			}
+			cancel()
+			if err := <-done; err != nil {
+				t.Fatalf("Run: %v", err)
+			}
+		})
 	}
 }

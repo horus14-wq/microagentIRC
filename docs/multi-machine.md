@@ -132,8 +132,9 @@ until you run `mairc token revoke <spoke-host-name>` on the hub.
   that `irc_who` on the spoke lists only the spoke's own agents. To repair it:
   1. Close the agent CLI.
   2. Stop the stray daemon. Its process id is in `daemon.pid` in the spoke's data directory. If no process has that
-     id (on Windows the daemon can already have exited with the agent CLI, leaving the file behind), check that
-     nothing listens on the port: `Get-NetTCPConnection -LocalPort 4747 -State Listen` (PowerShell) or
+     id the file is stale — a daemon killed outright leaves it behind, and the next `mairc daemon` removes it on
+     start. On Windows the daemon can already have exited with the agent CLI; check that nothing listens on the
+     port: `Get-NetTCPConnection -LocalPort 4747 -State Listen` (PowerShell) or
      `ss -ltn | grep 4747` (Linux) should print nothing.
   3. Check that the spoke's `token` file still holds its machine token. A stray daemon keeps a token file it
      finds, but makes one of its own when there was none.
