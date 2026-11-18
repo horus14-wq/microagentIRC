@@ -29,6 +29,16 @@ func runRaw(o Options) (int, string) {
 	return Run(o), out.String()
 }
 
+// agyHookCommandWanted is the hook command install writes for Antigravity on this OS: the binary as one POSIX shell
+// word, or on Windows the native path in double quotes (agyHooks).
+func agyHookCommandWanted(event string) string {
+	binary := nativeTestBinary(testBinary)
+	if binary != testBinary {
+		binary = `"` + binary + `"`
+	}
+	return binary + " hook --client agy --event " + event
+}
+
 // jbin is the native test binary as it appears inside a JSON string (backslashes escaped on Windows).
 func jbin() string {
 	quoted, _ := json.Marshal(nativeTestBinary(testBinary))
@@ -445,7 +455,7 @@ func TestAntigravityHooks(t *testing.T) {
 	for event, handlers := range map[string][]map[string]any{
 		"SessionStart": ours.SessionStart, "PreInvocation": ours.PreInvocation,
 	} {
-		want := testBinary + " hook --client agy --event " + event
+		want := agyHookCommandWanted(event)
 		if len(handlers) != 1 || handlers[0]["type"] != "command" || handlers[0]["command"] != want ||
 			handlers[0]["timeout"] != float64(5) || len(handlers[0]) != 3 {
 			t.Fatalf("%s handlers = %v, want one command %q", event, handlers, want)
@@ -464,7 +474,7 @@ func TestAntigravityHooks(t *testing.T) {
 	for _, s := range Statuses(Options{Scope: "user", Home: home, Only: []string{"agy"}}) {
 		wantMCP := filepath.Join(home, ".gemini", "config", "mcp_config.json")
 		if s.HookPath != path || !s.HookPresent || s.MCPPath != wantMCP || !s.MCPPresent ||
-			s.HookCommand != testBinary+" hook --client agy --event SessionStart" {
+			s.HookCommand != agyHookCommandWanted("SessionStart") {
 			t.Fatalf("status = %+v", s)
 		}
 	}
